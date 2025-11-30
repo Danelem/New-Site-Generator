@@ -176,10 +176,9 @@ export default function WizardPage() {
                         className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       >
                         <option value="">Select age range</option>
-                        <option value="18-24">18-24</option>
-                        <option value="25-34">25-34</option>
-                        <option value="35-44">35-44</option>
-                        <option value="45+">45+</option>
+                        <option value="18-34">18–34</option>
+                        <option value="35+">35+</option>
+                        <option value="all">All</option>
                       </select>
                     </div>
 
@@ -254,7 +253,7 @@ export default function WizardPage() {
 
                   <div className="bg-blue-50 border border-blue-200 rounded-md p-4 mb-6">
                     <p className="text-sm text-blue-800">
-                      💡 Later, the content generator will auto-fill these fields based on your template and settings.
+                      Later, the content generator will auto-fill these fields.
                     </p>
                   </div>
 
