@@ -15,6 +15,22 @@ A Next.js-based tool for generating marketing funnel sites with AI-powered conte
 npm install
 ```
 
+### Environment Setup
+
+1. Copy the `env.template` file and rename it to `.env.local`:
+   ```bash
+   cp env.template .env.local
+   ```
+
+2. Get your Google AI API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+
+3. Open `.env.local` and replace `your-api-key-here` with your actual API key:
+   ```
+   GOOGLE_AI_API_KEY=your-actual-key-here
+   ```
+
+4. Save the file and restart your dev server
+
 ### Development
 
 Run the development server:

@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import CreatineReportTemplate, { CreatineReportProps } from '@/components/templates/CreatineReportTemplate';
 
 const sampleData: CreatineReportProps = {
@@ -59,21 +60,15 @@ const sampleData: CreatineReportProps = {
 export default function PreviewPage() {
   return (
     <div>
-      <div style={{ 
-        maxWidth: '1200px', 
-        margin: '0 auto', 
-        padding: '20px',
-        backgroundColor: '#fff',
-        borderBottom: '2px solid #e0e0e0'
-      }}>
-        <h2 style={{ 
-          fontSize: '18px', 
-          fontWeight: '600', 
-          color: '#333',
-          margin: 0
-        }}>
-          Template Preview – Creatine Report (hard-coded data)
-        </h2>
+      <div className="max-w-7xl mx-auto px-6 py-4 bg-white border-b border-gray-200">
+        <div className="flex items-center justify-between">
+          <Link href="/" className="text-sm text-blue-600 hover:text-blue-800 font-medium">
+            ← Back to Home
+          </Link>
+          <h2 className="text-lg font-semibold text-gray-900">
+            Template Preview – Creatine Report (hard-coded data)
+          </h2>
+        </div>
       </div>
       <CreatineReportTemplate {...sampleData} />
     </div>

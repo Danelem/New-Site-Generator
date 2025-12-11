@@ -38,19 +38,20 @@ export default function Home() {
           >
             View Template Preview
           </Link>
+          <Link 
+            href="/templates"
+            className="inline-flex items-center justify-center px-8 py-4 text-lg font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors shadow-md hover:shadow-lg"
+          >
+            Manage Templates
+          </Link>
+          <Link 
+            href="/funnels"
+            className="inline-flex items-center justify-center px-8 py-4 text-lg font-semibold text-white bg-orange-600 rounded-lg hover:bg-orange-700 transition-colors shadow-md hover:shadow-lg"
+          >
+            My Funnels
+          </Link>
         </div>
 
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
-          <h3 className="text-lg font-semibold mb-2 text-blue-900">
-            Coming Soon
-          </h3>
-          <ul className="list-disc list-inside text-blue-800 space-y-1">
-            <li>Template selection and upload</li>
-            <li>AI-powered content generation</li>
-            <li>Live preview</li>
-            <li>Export functionality</li>
-          </ul>
-        </div>
       </div>
     </main>
   )
