@@ -51,185 +51,143 @@ export function TemplateUploadPanel({ onUploadSuccess }: TemplateUploadPanelProp
       const doc = parser.parseFromString(htmlBody, "text/html");
       const body = doc.body;
 
-      // Automatically detect all text-containing elements
-      const textElements: { element: Element; type: string; label: string; index: number }[] = [];
-      const processedElements = new Set<Element>();
-      
-      const isAlreadyProcessed = (el: Element): boolean => {
-        if (processedElements.has(el)) return true;
-        for (const processed of processedElements) {
-          if (processed.contains(el)) return true;
-        }
-        return false;
-      };
-
       const getTextPreview = (text: string, maxLen: number = 40): string => {
         const trimmed = text.trim();
         if (trimmed.length === 0) return "";
         return trimmed.length > maxLen ? trimmed.substring(0, maxLen) + "..." : trimmed;
       };
 
-      // 1. Find all headings (h1-h6)
-      const headings = body.querySelectorAll("h1, h2, h3, h4, h5, h6");
-      headings.forEach((el) => {
-        const text = el.textContent?.trim() || "";
-        if (text.length > 0 && !isAlreadyProcessed(el)) {
-          const tagName = el.tagName.toLowerCase();
-          const idx = textElements.filter(te => te.type === tagName).length;
-          textElements.push({
-            element: el,
-            type: tagName,
-            label: `${tagName.toUpperCase()} ${idx + 1}: ${getTextPreview(text, 50)}`,
-            index: idx
-          });
-          processedElements.add(el);
-        }
-      });
+      // Find all headings in document order
+      const allHeadings = Array.from(body.querySelectorAll("h1, h2, h3, h4, h5, h6"))
+        .filter(h => h.textContent?.trim().length > 0);
+      
+      const processedElements = new Set<Element>();
+      const sections: { container: Element; heading: Element | null; label: string; index: number }[] = [];
+      let sectionIndex = 0;
 
-      // 2. Find all paragraphs
-      const paragraphs = body.querySelectorAll("p");
-      paragraphs.forEach((el) => {
-        const text = el.textContent?.trim() || "";
-        if (text.length > 10 && !isAlreadyProcessed(el)) {
-          const idx = textElements.filter(te => te.type === "paragraph").length;
-          textElements.push({
-            element: el,
-            type: "paragraph",
-            label: `Paragraph ${idx + 1}: ${getTextPreview(text, 50)}`,
-            index: idx
-          });
-          processedElements.add(el);
-        }
-      });
+      // Group content between headings into sections
+      for (let i = 0; i < allHeadings.length; i++) {
+        const heading = allHeadings[i];
+        if (processedElements.has(heading)) continue;
 
-      // 3. Find all lists (ul, ol)
-      const lists = body.querySelectorAll("ul, ol");
-      lists.forEach((list) => {
-        const text = list.textContent?.trim() || "";
-        if (text.length > 0 && !isAlreadyProcessed(list)) {
-          const listType = list.tagName.toLowerCase();
-          const idx = textElements.filter(te => te.type === "list").length;
-          textElements.push({
-            element: list,
-            type: "list",
-            label: `${listType.toUpperCase()} List ${idx + 1}`,
-            index: idx
-          });
-          processedElements.add(list);
-        }
-      });
-
-      // 4. Find divs with text content
-      const divs = body.querySelectorAll("div");
-      divs.forEach((el) => {
-        if (isAlreadyProcessed(el)) return;
+        const headingText = heading.textContent?.trim() || "";
+        const nextHeading = i < allHeadings.length - 1 ? allHeadings[i + 1] : null;
         
-        const text = el.textContent?.trim() || "";
-        if (text.length < 20) return;
+        // Collect all content elements between this heading and the next heading
+        const sectionElements: Element[] = [];
+        let currentEl: Node | null = heading;
         
-        const childCount = el.children.length;
-        const hasDirectText = Array.from(el.childNodes).some(
-          node => node.nodeType === Node.TEXT_NODE && node.textContent?.trim().length > 0
-        );
-        
-        let containsProcessed = false;
-        for (const processed of processedElements) {
-          if (el.contains(processed) && el !== processed) {
-            containsProcessed = true;
+        // Walk through siblings after the heading
+        while (currentEl && currentEl.nextSibling) {
+          currentEl = currentEl.nextSibling;
+          
+          if (currentEl.nodeType !== Node.ELEMENT_NODE) continue;
+          
+          const el = currentEl as Element;
+          
+          // Stop if we hit the next heading
+          if (nextHeading && (el === nextHeading || el.contains(nextHeading))) {
             break;
           }
-        }
-        
-        if (!containsProcessed && (
-          (text.length >= 30 && (hasDirectText || childCount <= 8)) ||
-          text.length >= 100
-        )) {
-          const idx = textElements.filter(te => te.type === "div").length;
-          textElements.push({
-            element: el,
-            type: "div",
-            label: `Content Block ${idx + 1}: ${getTextPreview(text, 50)}`,
-            index: idx
-          });
-          processedElements.add(el);
-        }
-      });
-
-      // 5. Find other text-containing elements (spans, blockquotes, etc.)
-      const otherElements = body.querySelectorAll("span, strong, em, b, i, blockquote, article, section");
-      otherElements.forEach((el) => {
-        if (isAlreadyProcessed(el)) return;
-        
-        const text = el.textContent?.trim() || "";
-        const minLength = (el.tagName === "SPAN" || el.tagName === "STRONG" || el.tagName === "EM" || el.tagName === "B" || el.tagName === "I") ? 50 : 30;
-        if (text.length >= minLength) {
-          const tagName = el.tagName.toLowerCase();
-          const idx = textElements.filter(te => te.type === tagName).length;
-          textElements.push({
-            element: el,
-            type: tagName,
-            label: `${tagName.toUpperCase()} ${idx + 1}: ${getTextPreview(text, 50)}`,
-            index: idx
-          });
-          processedElements.add(el);
-        }
-      });
-
-      // 5. Fallback: If we found very few elements, find any element with substantial text
-      if (textElements.length < 5) {
-        const allElements = body.querySelectorAll("*");
-        allElements.forEach((el) => {
-          if (isAlreadyProcessed(el)) return;
-          if (el.tagName === "SCRIPT" || el.tagName === "STYLE" || el.tagName === "NOSCRIPT") return;
           
-          const text = el.textContent?.trim() || "";
-          if (text.length >= 40 && el.children.length <= 10) {
-            let isNested = false;
-            for (const processed of processedElements) {
-              if (processed.contains(el) && processed !== el) {
-                isNested = true;
-                break;
-              }
-            }
-            
-            if (!isNested) {
-              const tagName = el.tagName.toLowerCase();
-              const typeKey = `element_${tagName}`;
-              const idx = textElements.filter(te => te.type === typeKey).length;
-              textElements.push({
-                element: el,
-                type: typeKey,
-                label: `${tagName.toUpperCase()} ${idx + 1}: ${getTextPreview(text, 50)}`,
-                index: idx
-              });
+          // Check if this is a content element
+          const tag = el.tagName.toUpperCase();
+          const isContentElement = 
+            tag === "P" || tag === "UL" || tag === "OL" || 
+            tag === "IMG" || tag === "BLOCKQUOTE" || 
+            tag === "DIV" || tag === "ARTICLE" || tag === "SECTION";
+          
+          if (isContentElement) {
+            const text = el.textContent?.trim() || "";
+            // For paragraphs, require minimum text length
+            if (tag === "P" && text.length < 10) continue;
+            // Include images and elements with text
+            if (tag === "IMG" || text.length > 0) {
+              sectionElements.push(el);
               processedElements.add(el);
             }
           }
+        }
+
+        // Create container for this section
+        let container: Element;
+        
+        if (sectionElements.length > 0) {
+          // Create a wrapper div
+          container = doc.createElement("div");
+          container.className = "template-section-group";
+          
+          const parent = heading.parentElement;
+          if (parent) {
+            // Insert container before the heading
+            parent.insertBefore(container, heading);
+            
+            // Move heading into container
+            container.appendChild(heading);
+            
+            // Move all content elements into container
+            sectionElements.forEach(el => {
+              container.appendChild(el);
+            });
+          }
+        } else {
+          // No content, just use the heading itself
+          container = heading;
+        }
+
+        processedElements.add(heading);
+        sections.push({
+          container,
+          heading,
+          label: `Section ${sectionIndex + 1}: ${getTextPreview(headingText, 50)}`,
+          index: sectionIndex++
         });
       }
 
+      // Handle standalone images not between headings
+      const allImages = body.querySelectorAll("img");
+      allImages.forEach((img) => {
+        if (processedElements.has(img)) return;
+        
+        const alt = img.getAttribute("alt") || "";
+        const src = img.getAttribute("src") || "";
+        const label = alt || src || `Image ${sections.length + 1}`;
+        
+        sections.push({
+          container: img,
+          heading: null,
+          label: `Image ${sections.length + 1}: ${label.length > 40 ? label.substring(0, 40) + "..." : label}`,
+          index: sectionIndex++
+        });
+        processedElements.add(img);
+      });
+
       // Add data-slot attributes and create slots
       const slots: TemplateSlot[] = [];
-      textElements.forEach((item) => {
-        const slotId = `section_${item.type}_${item.index}`;
+      sections.forEach((section) => {
+        const slotId = `section_content_${section.index}`;
         
-        // Add data-slot attribute to the element
-        item.element.setAttribute("data-slot", slotId);
+        // Add data-slot attribute to the container
+        section.container.setAttribute("data-slot", slotId);
         
-        // Determine slot type
+        // Determine slot type based on content
         let slotType: TemplateSlot["type"] = "text";
-        if (item.type === "ul" || item.type === "ol" || item.type === "list") {
-          slotType = "list";
-        } else if (item.element.tagName === "IMG") {
+        const containerTag = section.container.tagName.toUpperCase();
+        
+        if (containerTag === "IMG") {
           slotType = "image";
-        } else if (item.element.tagName === "A") {
-          slotType = "url";
+        } else {
+          // Check if container has lists
+          const hasList = section.container.querySelector("ul, ol");
+          if (hasList) {
+            slotType = "text"; // Mixed content defaults to text
+          }
         }
 
         slots.push({
           id: slotId,
           type: slotType,
-          label: item.label
+          label: section.label
         });
       });
 

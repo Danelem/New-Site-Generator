@@ -54,8 +54,45 @@ export function UploadedTemplateRenderer({ template, slotData }: UploadedTemplat
         elements.forEach((el) => {
           // For text/list slots, replace innerHTML or textContent
           if (slot.type === "text" || slot.type === "list") {
-            // If it's a list element (ul/ol), try to parse as list items
-            if (el.tagName === "UL" || el.tagName === "OL") {
+            // Check if this is a section container (div with heading inside)
+            if (el.classList.contains("template-section-group")) {
+              // For section containers, preserve the heading and replace only content
+              const heading = el.querySelector("h1, h2, h3, h4, h5, h6");
+              const contentElements = Array.from(el.children).filter(
+                child => child !== heading && 
+                (child.tagName === "P" || child.tagName === "UL" || child.tagName === "OL" || 
+                 child.tagName === "DIV" || child.tagName === "BLOCKQUOTE")
+              );
+              
+              // Remove old content elements
+              contentElements.forEach(child => child.remove());
+              
+              // Add new content as paragraphs (split by double newlines or keep as single block)
+              if (slotContent.trim()) {
+                const paragraphs = slotContent.split(/\n\n+/).filter(p => p.trim());
+                if (paragraphs.length > 0) {
+                  paragraphs.forEach(para => {
+                    const p = doc.createElement("p");
+                    p.textContent = para.trim();
+                    if (heading && heading.nextSibling) {
+                      el.insertBefore(p, heading.nextSibling);
+                    } else {
+                      el.appendChild(p);
+                    }
+                  });
+                } else {
+                  // Single paragraph
+                  const p = doc.createElement("p");
+                  p.textContent = slotContent.trim();
+                  if (heading && heading.nextSibling) {
+                    el.insertBefore(p, heading.nextSibling);
+                  } else {
+                    el.appendChild(p);
+                  }
+                }
+              }
+            } else if (el.tagName === "UL" || el.tagName === "OL") {
+              // If it's a list element (ul/ol), try to parse as list items
               const items = slotContent
                 .split("\n")
                 .map((line) => line.trim())

@@ -54,38 +54,90 @@ export default function EditTemplatePage({ params }: { params: { id: string } })
       return trimmed.length > maxLen ? trimmed.substring(0, maxLen) + "..." : trimmed;
     };
 
-    // 1. Find all headings
-    const headings = body.querySelectorAll("h1, h2, h3, h4, h5, h6");
-    headings.forEach((el) => {
-      const text = el.textContent?.trim() || "";
-      if (text.length > 0 && !isAlreadyProcessed(el)) {
-        const tagName = el.tagName.toLowerCase();
-        const idx = textElements.filter(te => te.type === tagName).length;
-        textElements.push({
-          element: el,
-          type: tagName,
-          label: `${tagName.toUpperCase()} ${idx + 1}: ${getTextPreview(text, 50)}`,
-          index: idx
-        });
-        processedElements.add(el);
-      }
-    });
+    // 1. Find all headings in document order and group content between them
+    const allHeadings = Array.from(body.querySelectorAll("h1, h2, h3, h4, h5, h6"))
+      .filter(h => h.textContent?.trim().length > 0);
+    
+    for (let i = 0; i < allHeadings.length; i++) {
+      const heading = allHeadings[i];
+      if (isAlreadyProcessed(heading)) continue;
 
-    // 2. Find all paragraphs
-    const paragraphs = body.querySelectorAll("p");
-    paragraphs.forEach((el) => {
-      const text = el.textContent?.trim() || "";
-      if (text.length > 10 && !isAlreadyProcessed(el)) {
-        const idx = textElements.filter(te => te.type === "paragraph").length;
-        textElements.push({
-          element: el,
-          type: "paragraph",
-          label: `Paragraph ${idx + 1}: ${getTextPreview(text, 50)}`,
-          index: idx
-        });
-        processedElements.add(el);
+      const headingText = heading.textContent?.trim() || "";
+      const nextHeading = i < allHeadings.length - 1 ? allHeadings[i + 1] : null;
+      
+      // Collect all content elements between this heading and the next heading
+      const sectionElements: Element[] = [];
+      let currentEl: Node | null = heading;
+      
+      // Walk through siblings after the heading
+      while (currentEl && currentEl.nextSibling) {
+        currentEl = currentEl.nextSibling;
+        
+        if (currentEl.nodeType !== Node.ELEMENT_NODE) continue;
+        
+        const el = currentEl as Element;
+        
+        // Stop if we hit the next heading
+        if (nextHeading && (el === nextHeading || el.contains(nextHeading))) {
+          break;
+        }
+        
+        // Check if this is a content element
+        const tag = el.tagName.toUpperCase();
+        const isContentElement = 
+          tag === "P" || tag === "UL" || tag === "OL" || 
+          tag === "IMG" || tag === "BLOCKQUOTE" || 
+          tag === "DIV" || tag === "ARTICLE" || tag === "SECTION";
+        
+        if (isContentElement && !isAlreadyProcessed(el)) {
+          const text = el.textContent?.trim() || "";
+          // For paragraphs, require minimum text length
+          if (tag === "P" && text.length < 10) continue;
+          // Include images and elements with text
+          if (tag === "IMG" || text.length > 0) {
+            sectionElements.push(el);
+            processedElements.add(el);
+          }
+        }
       }
-    });
+
+      // Create container for this section
+      let container: Element;
+      
+      if (sectionElements.length > 0) {
+        // Create a wrapper div
+        container = doc.createElement("div");
+        container.className = "template-section-group";
+        
+        const parent = heading.parentElement;
+        if (parent) {
+          // Insert container before the heading
+          parent.insertBefore(container, heading);
+          
+          // Move heading into container
+          container.appendChild(heading);
+          
+          // Move all content elements into container
+          sectionElements.forEach(el => {
+            container.appendChild(el);
+          });
+        }
+      } else {
+        // No content, just use the heading itself
+        container = heading;
+      }
+
+      processedElements.add(heading);
+      
+      const tagName = heading.tagName.toLowerCase();
+      const idx = textElements.filter(te => te.type === "section").length;
+      textElements.push({
+        element: container,
+        type: "section",
+        label: `Section ${idx + 1}: ${getTextPreview(headingText, 50)}`,
+        index: idx
+      });
+    }
 
     // 3. Find all lists
     const lists = body.querySelectorAll("ul, ol");
@@ -100,6 +152,44 @@ export default function EditTemplatePage({ params }: { params: { id: string } })
           index: idx
         });
         processedElements.add(list);
+      }
+    });
+
+    // 3.5. Find all images (img tags)
+    const images = body.querySelectorAll("img");
+    images.forEach((el) => {
+      if (isAlreadyProcessed(el)) return;
+      
+      const alt = el.getAttribute("alt") || "";
+      const src = el.getAttribute("src") || "";
+      const idx = textElements.filter(te => te.type === "image").length;
+      const label = alt || src || `Image ${idx + 1}`;
+      
+      textElements.push({
+        element: el,
+        type: "image",
+        label: `Image ${idx + 1}: ${label.length > 40 ? label.substring(0, 40) + "..." : label}`,
+        index: idx
+      });
+      processedElements.add(el);
+    });
+
+    // 3.6. Find all links (a tags)
+    const links = body.querySelectorAll("a[href]");
+    links.forEach((el) => {
+      if (isAlreadyProcessed(el)) return;
+      
+      const href = el.getAttribute("href") || "";
+      const text = el.textContent?.trim() || "";
+      if (href && (href.startsWith("http") || href.startsWith("/") || href.startsWith("#"))) {
+        const idx = textElements.filter(te => te.type === "url").length;
+        textElements.push({
+          element: el,
+          type: "url",
+          label: `Link ${idx + 1}: ${text || href}`,
+          index: idx
+        });
+        processedElements.add(el);
       }
     });
 
@@ -148,6 +238,13 @@ export default function EditTemplatePage({ params }: { params: { id: string } })
       let slotType: TemplateSlot["type"] = "text";
       if (item.type === "ul" || item.type === "ol" || item.type === "list") {
         slotType = "list";
+      } else if (item.type === "image" || item.element.tagName === "IMG") {
+        slotType = "image";
+      } else if (item.type === "url" || item.element.tagName === "A") {
+        slotType = "url";
+      } else if (item.type === "section") {
+        // Section containers are text type (can contain paragraphs, lists, etc.)
+        slotType = "text";
       }
 
       slots.push({

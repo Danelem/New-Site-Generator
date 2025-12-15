@@ -5,9 +5,11 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import CreatineReportTemplate, { CreatineReportProps } from '@/components/templates/CreatineReportTemplate';
 import { UploadedTemplateRenderer } from '@/components/templates/UploadedTemplateRenderer';
+import { ImageSlotUpload } from '@/components/templates/ImageSlotUpload';
 import { TEMPLATES, TemplateId } from '@/lib/templates/registry';
 import { loadUploadedTemplates } from '@/lib/templates/uploadedStorage';
 import type { UploadedTemplate } from '@/lib/templates/uploadedTypes';
+import { extractImageMetadata } from '@/lib/templates/imageExtractor';
 import { FunnelConfig } from '@/lib/funnels/types';
 import { getFunnelById, upsertFunnel } from '@/lib/funnels/storage';
 import { ExportFormat } from '@/lib/export/types';
@@ -1940,7 +1942,29 @@ export default function WizardPage() {
                                 </button>
                               )}
                             </div>
-                            {slot.type === 'list' ? (
+                            {slot.type === 'image' ? (
+                              <ImageSlotUpload
+                                slotId={slot.id}
+                                slotLabel={slot.label}
+                                value={slotValue}
+                                onChange={(newValue) => {
+                                  setData(prev => ({
+                                    ...prev,
+                                    slotData: { ...prev.slotData || {}, [slot.id]: newValue }
+                                  }));
+                                }}
+                                placeholderImage={
+                                  selected.template
+                                    ? extractImageMetadata(selected.template.htmlBody, slot.id)?.src
+                                    : undefined
+                                }
+                                dimensions={
+                                  selected.template
+                                    ? extractImageMetadata(selected.template.htmlBody, slot.id) || undefined
+                                    : undefined
+                                }
+                              />
+                            ) : slot.type === 'list' ? (
                               <textarea
                                 value={slotValue}
                                 onChange={(e) => {
