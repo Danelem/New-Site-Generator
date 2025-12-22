@@ -216,8 +216,11 @@ async function generateLegacy(body: GenerateContentRequest): Promise<Response> {
     const genAI = new GoogleGenerativeAI(apiKey);
     
     // Try multiple model names - different API keys may have access to different models
+    // Prioritizing Gemini 3 models
     const modelNames = [
-      'gemini-2.0-flash',         // Gemini 2.0 Flash (primary)
+      'gemini-3-pro-preview',     // Gemini 3 Pro Preview (primary)
+      'gemini-3-pro',             // Gemini 3 Pro (fallback)
+      'gemini-2.0-flash',         // Gemini 2.0 Flash (fallback)
       'gemini-1.5-flash-latest',  // Latest flash model (fallback)
       'gemini-1.5-pro-latest',    // Latest pro model (fallback)
       'gemini-1.5-flash',         // Flash without version (fallback)

@@ -62,9 +62,11 @@ export class GoogleGeminiProvider implements AIModelProvider {
 
     const genAI = new GoogleGenerativeAI(config.apiKey);
     
-    // Try multiple model names with fallback
+    // Try multiple model names with fallback (prioritizing Gemini 3)
     const modelNames = [
       config.modelName,
+      'gemini-3-pro-preview',
+      'gemini-3-pro',
       'gemini-2.0-flash',
       'gemini-1.5-flash-latest',
       'gemini-1.5-pro-latest',
@@ -163,9 +165,9 @@ export class ContentGenerator {
       throw new Error('GOOGLE_AI_API_KEY environment variable is not set');
     }
 
-    // Default model configuration
+    // Default model configuration (using Gemini 3)
     this.modelConfig = {
-      modelName: 'gemini-2.0-flash',
+      modelName: 'gemini-3-pro-preview',
       apiKey,
       temperature: 0.7,
       maxTokens: 4000,

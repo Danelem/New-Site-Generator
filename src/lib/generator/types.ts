@@ -140,7 +140,7 @@ export interface BatchGenerationResponse {
  * Allows easy swapping of AI providers/models.
  */
 export interface AIModelConfig {
-  /** Model identifier (e.g., 'gemini-2.0-flash') */
+  /** Model identifier (e.g., 'gemini-3-pro-preview') */
   modelName: string;
   /** API key for the AI service */
   apiKey: string;
