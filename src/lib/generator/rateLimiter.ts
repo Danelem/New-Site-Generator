@@ -27,29 +27,32 @@ class RateLimiter {
   async waitIfNeeded(): Promise<void> {
     const now = Date.now();
     
+    // In serverless environments (Vercel), each function invocation is isolated
+    // So rate limiting state doesn't persist. Use minimal delays to avoid timeouts.
+    
     // Clean up old timestamps (older than 1 minute)
     this.requestTimestamps = this.requestTimestamps.filter(
       timestamp => now - timestamp < 60000
     );
 
-    // Check per-second limit (reduced delay for serverless environments)
+    // Check per-second limit (minimal delay for serverless)
     const timeSinceLastRequest = now - this.lastRequestTime;
     const minDelayBetweenRequests = 1000 / this.config.maxRequestsPerSecond; // milliseconds
     
     if (timeSinceLastRequest < minDelayBetweenRequests) {
       const waitTime = minDelayBetweenRequests - timeSinceLastRequest;
-      // Only wait if it's a significant delay (avoid micro-delays in serverless)
-      if (waitTime > 100) {
+      // Only wait if it's significant (avoid micro-delays that add up)
+      if (waitTime > 200) {
         console.log(`⏳ Rate limiter: Waiting ${waitTime.toFixed(0)}ms before next request...`);
         await this.sleep(waitTime);
       }
     }
 
-    // Check per-minute limit
+    // Check per-minute limit (less strict in serverless)
     if (this.requestTimestamps.length >= this.config.maxRequestsPerMinute) {
       const oldestRequest = this.requestTimestamps[0];
       const waitTime = 60000 - (now - oldestRequest) + 100; // Add 100ms buffer
-      if (waitTime > 0) {
+      if (waitTime > 0 && waitTime < 10000) { // Don't wait more than 10s in serverless
         console.log(`⏳ Rate limiter: Per-minute limit reached. Waiting ${(waitTime / 1000).toFixed(1)}s...`);
         await this.sleep(waitTime);
         // Clean up again after waiting

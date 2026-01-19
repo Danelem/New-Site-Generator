@@ -11,9 +11,6 @@
     },
     "src/app/api/regenerate-slot/route.ts": {
       "maxDuration": 300
-    },
-    "src/app/api/**/*.ts": {
-      "maxDuration": 60
     }
   },
   "buildCommand": "npm run build",

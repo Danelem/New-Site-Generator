@@ -3,6 +3,10 @@ import { createContentGenerator } from '@/lib/generator/ContentGenerator';
 import type { UserConfig } from '@/lib/generator/types';
 import { GoogleGenerativeAI } from '@/lib/generator/googleAI';
 
+// Set max duration for Vercel (5 minutes = 300 seconds)
+export const maxDuration = 300;
+export const runtime = 'nodejs';
+
 interface GenerateContentRequest {
   productName: string;
   mainKeyword: string;

@@ -50,13 +50,13 @@ function sleep(ms: number): Promise<void> {
  */
 export class GoogleGeminiProvider implements AIModelProvider {
   async generateText(prompt: string, config: AIModelConfig): Promise<string> {
-    // Wait for rate limiter before making request
+    // Wait for rate limiter before making request (minimal delay in serverless)
     await rateLimiter.waitIfNeeded();
     
     const genAI = new GoogleGenerativeAI(config.apiKey);
     
     // Try multiple model names with fallback (prioritizing faster models for serverless)
-    // Start with faster models to avoid timeouts, fall back to more capable models
+    // Reduced model list and retries to avoid timeouts in Vercel
     const modelNames = [
       config.modelName,
       'gemini-1.5-flash', // Fastest, good for most use cases
@@ -64,74 +64,68 @@ export class GoogleGeminiProvider implements AIModelProvider {
       'gemini-2.0-flash',
       'gemini-1.5-pro-latest', // More capable but slower
       'gemini-1.5-pro',
-      'gemini-3-pro-preview', // Most capable but slowest
-      'gemini-3-pro',
-      'gemini-pro',
     ];
 
     let lastError: any = null;
     
+    // Add timeout wrapper (240 seconds = 4 minutes, leaving buffer for Vercel's 5min limit)
+    const timeoutMs = 240000;
+    
     for (const modelName of modelNames) {
-      // Retry logic with exponential backoff for rate limits
-      const maxRetries = 5; // Increased retries for rate limits
-      let retryCount = 0;
-      
-      while (retryCount <= maxRetries) {
-        try {
-          const model = genAI.getGenerativeModel({ 
-            model: modelName,
-            generationConfig: {
-              temperature: config.temperature ?? 0.7,
-              maxOutputTokens: config.maxTokens,
-            },
-          });
-          
+      // No retries - try each model once to avoid timeout
+      try {
+        const model = genAI.getGenerativeModel({ 
+          model: modelName,
+          generationConfig: {
+            temperature: config.temperature ?? 0.7,
+            maxOutputTokens: config.maxTokens,
+          },
+        });
+        
+        // Wrap the API call in a timeout promise
+        const generatePromise = (async () => {
           const result = await model.generateContent(prompt);
           const response = await result.response;
-          const text = response.text();
-          
-          console.log(`✅ Successfully generated content using model: ${modelName}`);
-          return text;
-        } catch (error: any) {
-          lastError = error;
-          
-          // If it's a 404/model not found error, try the next model
-          if (error.message?.includes('404') || 
-              error.message?.includes('not found') ||
-              error.message?.includes('is not found')) {
-            console.log(`⚠️ Model ${modelName} not available, trying next...`);
-            break; // Break out of retry loop, try next model
-          } 
-          // If it's a rate limit error, use rate limiter and retry
-          else if (error.message?.includes('429') || 
-                   error.message?.includes('Too Many Requests') ||
-                   error.message?.includes('rate limit') ||
-                   error.status === 429 ||
-                   error.code === 429) {
-            if (retryCount < maxRetries) {
-              // Use rate limiter to handle the delay
-              await rateLimiter.handleRateLimitError(error);
-              
-              // Wait additional time before retry
-              await rateLimiter.waitIfNeeded();
-              
-              console.log(`🔄 Retrying after rate limit (attempt ${retryCount + 1}/${maxRetries})...`);
-              retryCount++;
-              continue; // Retry the same model
-            } else {
-              // Max retries reached, throw error
-              throw new Error(
-                'API rate limit exceeded (429 Too Many Requests). ' +
-                'Maximum retries reached. Please wait a few minutes before trying again. ' +
-                'If this persists, check your Google AI API quota and usage limits. ' +
-                `Current request count: ${rateLimiter.getCurrentRequestCount()}/minute`
-              );
-            }
-          } 
-          // For other errors (auth, etc), throw immediately
-          else {
-            throw error;
-          }
+          return response.text();
+        })();
+        
+        const timeoutPromise = new Promise<string>((_, reject) => {
+          setTimeout(() => reject(new Error(`Request timeout after ${timeoutMs / 1000}s`)), timeoutMs);
+        });
+        
+        const text = await Promise.race([generatePromise, timeoutPromise]);
+        
+        console.log(`✅ Successfully generated content using model: ${modelName}`);
+        return text;
+      } catch (error: any) {
+        lastError = error;
+        
+        // If it's a timeout, don't try more models - throw immediately
+        if (error.message?.includes('timeout') || error.message?.includes('Timeout')) {
+          console.log(`⏱️ Timeout with ${modelName}, aborting...`);
+          throw new Error(`Request timed out after ${timeoutMs / 1000}s. The AI generation is taking too long.`);
+        }
+        
+        // If it's a 404/model not found error, try the next model immediately
+        if (error.message?.includes('404') || 
+            error.message?.includes('not found') ||
+            error.message?.includes('is not found')) {
+          console.log(`⚠️ Model ${modelName} not available, trying next...`);
+          continue; // Try next model
+        } 
+        // If it's a rate limit error, try next model (don't retry to avoid timeout)
+        else if (error.message?.includes('429') || 
+                 error.message?.includes('Too Many Requests') ||
+                 error.message?.includes('rate limit') ||
+                 error.status === 429 ||
+                 error.code === 429) {
+          console.log(`⚠️ Rate limit hit for ${modelName}, trying next model...`);
+          continue; // Try next model instead of retrying
+        } 
+        // For other errors, try next model
+        else {
+          console.log(`⚠️ Error with ${modelName}: ${error.message}. Trying next model...`);
+          continue; // Try next model
         }
       }
     }
@@ -139,7 +133,7 @@ export class GoogleGeminiProvider implements AIModelProvider {
     // If all models failed
     throw new Error(
       `No available Gemini models found. Tried: ${modelNames.join(', ')}. ` +
-      `Last error: ${lastError?.message || 'All models returned 404 Not Found'}`
+      `Last error: ${lastError?.message || 'All models failed'}`
     );
   }
 }
@@ -168,7 +162,7 @@ export class ContentGenerator {
       modelName: 'gemini-1.5-flash', // Use faster model by default for better timeout handling
       apiKey,
       temperature: 0.7,
-      maxTokens: 4000,
+      maxTokens: 3000, // Reduced from 4000 to speed up generation and avoid timeouts
       ...modelConfig,
     };
   }

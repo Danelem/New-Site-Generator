@@ -2,6 +2,10 @@ import { NextRequest } from 'next/server';
 import { createContentGenerator } from '@/lib/generator/ContentGenerator';
 import type { UserConfig, SlotType } from '@/lib/generator/types';
 
+// Set max duration for Vercel (5 minutes = 300 seconds)
+export const maxDuration = 300;
+export const runtime = 'nodejs';
+
 interface RegenerateSlotRequest {
   slotId: string;
   slotType: string;

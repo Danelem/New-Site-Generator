@@ -6,6 +6,10 @@ import type { TemplateConfig } from '@/lib/templates/types';
 import type { UserConfig } from '@/lib/generator/types';
 import type { TemplateId } from '@/lib/templates/registry';
 
+// Set max duration for Vercel (5 minutes = 300 seconds)
+export const maxDuration = 300;
+export const runtime = 'nodejs';
+
 interface MapNarrativeToSlotsRequest {
   coreNarrative: string;
   templateId: TemplateId;
