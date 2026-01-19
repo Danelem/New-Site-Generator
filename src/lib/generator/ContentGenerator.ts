@@ -55,16 +55,17 @@ export class GoogleGeminiProvider implements AIModelProvider {
     
     const genAI = new GoogleGenerativeAI(config.apiKey);
     
-    // Try multiple model names with fallback (prioritizing Gemini 3)
+    // Try multiple model names with fallback (prioritizing faster models for serverless)
+    // Start with faster models to avoid timeouts, fall back to more capable models
     const modelNames = [
       config.modelName,
-      'gemini-3-pro-preview',
-      'gemini-3-pro',
-      'gemini-2.0-flash',
+      'gemini-1.5-flash', // Fastest, good for most use cases
       'gemini-1.5-flash-latest',
-      'gemini-1.5-pro-latest',
-      'gemini-1.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-pro-latest', // More capable but slower
       'gemini-1.5-pro',
+      'gemini-3-pro-preview', // Most capable but slowest
+      'gemini-3-pro',
       'gemini-pro',
     ];
 
@@ -162,8 +163,9 @@ export class ContentGenerator {
     }
 
     // Default model configuration (using Gemini 3)
+    // Optimized for faster generation in serverless environments
     this.modelConfig = {
-      modelName: 'gemini-3-pro-preview',
+      modelName: 'gemini-1.5-flash', // Use faster model by default for better timeout handling
       apiKey,
       temperature: 0.7,
       maxTokens: 4000,

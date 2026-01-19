@@ -77,9 +77,27 @@ Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@google/generative-ai'
      - package.json
      - next.config.js
 
+### Issue: Function Timeout (60+ seconds)
+
+If you're getting timeout errors when generating content:
+
+```
+Vercel Runtime Timeout Error: Task timed out after 60 seconds
+```
+
+**Solution:**
+1. The `vercel.json` file already configures longer timeouts (300 seconds) for AI generation routes
+2. The app uses faster models (`gemini-1.5-flash`) by default to reduce generation time
+3. Rate limiter is optimized for serverless environments (reduced delays)
+4. If timeouts persist:
+   - Check Vercel plan limits (Pro plan allows up to 300 seconds)
+   - Consider reducing `maxTokens` in the generation config
+   - Monitor function logs to see where time is being spent
+
 ### Prevention
 
 - Always commit `package-lock.json`
 - Use static imports (not dynamic imports) for serverless functions
 - Test builds locally before deploying: `npm run build`
 - Monitor Vercel build logs for warnings
+- Use faster AI models (`gemini-1.5-flash`) for better timeout handling

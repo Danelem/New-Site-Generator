@@ -32,14 +32,17 @@ class RateLimiter {
       timestamp => now - timestamp < 60000
     );
 
-    // Check per-second limit
+    // Check per-second limit (reduced delay for serverless environments)
     const timeSinceLastRequest = now - this.lastRequestTime;
     const minDelayBetweenRequests = 1000 / this.config.maxRequestsPerSecond; // milliseconds
     
     if (timeSinceLastRequest < minDelayBetweenRequests) {
       const waitTime = minDelayBetweenRequests - timeSinceLastRequest;
-      console.log(`⏳ Rate limiter: Waiting ${waitTime.toFixed(0)}ms before next request...`);
-      await this.sleep(waitTime);
+      // Only wait if it's a significant delay (avoid micro-delays in serverless)
+      if (waitTime > 100) {
+        console.log(`⏳ Rate limiter: Waiting ${waitTime.toFixed(0)}ms before next request...`);
+        await this.sleep(waitTime);
+      }
     }
 
     // Check per-minute limit
@@ -118,9 +121,11 @@ class RateLimiter {
 }
 
 // Export a singleton instance
+// Note: In serverless environments (Vercel), each function invocation is isolated,
+// so rate limiting is per-instance. This is more lenient to avoid unnecessary delays.
 export const rateLimiter = new RateLimiter({
   maxRequestsPerMinute: 50, // Conservative limit (Google free tier is ~60/min)
-  maxRequestsPerSecond: 1.5, // 1.5 requests/second = 90 requests/minute max theoretical
+  maxRequestsPerSecond: 2, // Increased for serverless - each function is isolated
 });
 
 
