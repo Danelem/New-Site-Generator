@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { createContentGenerator } from '@/lib/generator/ContentGenerator';
 import type { UserConfig } from '@/lib/generator/types';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 interface GenerateContentRequest {
   productName: string;
@@ -192,24 +193,6 @@ async function generateLegacy(body: GenerateContentRequest): Promise<Response> {
     const apiKey = process.env.GOOGLE_AI_API_KEY;
     if (!apiKey) {
       throw new Error('GOOGLE_AI_API_KEY not set');
-    }
-
-    // Try to dynamically import Google Generative AI at runtime
-    let GoogleGenerativeAI: any;
-    try {
-      const googleAIModule = await Function('return import("@google/generative-ai")')();
-      GoogleGenerativeAI = googleAIModule.GoogleGenerativeAI;
-      if (!GoogleGenerativeAI) {
-        throw new Error('GoogleGenerativeAI class not found in module');
-      }
-    } catch (importError: any) {
-      return Response.json(
-        { 
-          error: 'Google AI package is not installed. Please run: npm install @google/generative-ai',
-          details: importError.message 
-        },
-        { status: 503 }
-      );
     }
 
     // Initialize Google AI client

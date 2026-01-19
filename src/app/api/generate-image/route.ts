@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 interface GenerateImageRequest {
   prompt: string;
@@ -36,13 +37,6 @@ export async function POST(request: NextRequest) {
     // For now, we'll try using Gemini's multimodal capabilities
     
     try {
-      const googleAIModule = await Function('return import("@google/generative-ai")')();
-      const GoogleGenerativeAI = googleAIModule.GoogleGenerativeAI;
-      
-      if (!GoogleGenerativeAI) {
-        throw new Error('GoogleGenerativeAI class not found');
-      }
-
       const genAI = new GoogleGenerativeAI(apiKey);
       
       // Build enhanced prompt with context

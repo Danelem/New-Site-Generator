@@ -28,6 +28,7 @@ import {
   extractJsonFromResponse,
 } from './prompts';
 import { rateLimiter } from './rateLimiter';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 /**
  * AI Model Provider Interface
@@ -52,14 +53,6 @@ export class GoogleGeminiProvider implements AIModelProvider {
     // Wait for rate limiter before making request
     await rateLimiter.waitIfNeeded();
     
-    // Dynamic import to avoid issues if package is not installed
-    const googleAIModule = await Function('return import("@google/generative-ai")')();
-    const GoogleGenerativeAI = googleAIModule.GoogleGenerativeAI;
-    
-    if (!GoogleGenerativeAI) {
-      throw new Error('GoogleGenerativeAI class not found in module');
-    }
-
     const genAI = new GoogleGenerativeAI(config.apiKey);
     
     // Try multiple model names with fallback (prioritizing Gemini 3)
@@ -86,7 +79,10 @@ export class GoogleGeminiProvider implements AIModelProvider {
         try {
           const model = genAI.getGenerativeModel({ 
             model: modelName,
-            temperature: config.temperature ?? 0.7,
+            generationConfig: {
+              temperature: config.temperature ?? 0.7,
+              maxOutputTokens: config.maxTokens,
+            },
           });
           
           const result = await model.generateContent(prompt);
