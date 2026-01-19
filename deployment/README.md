@@ -7,6 +7,7 @@ This directory contains configuration files for deploying the Site Generator app
 - **site-generator.service** - Systemd service file for running the application as a service
 - **nginx-site-generator.conf** - Nginx reverse proxy configuration
 - **DEPLOYMENT.md** - Complete deployment guide with step-by-step instructions
+- **DEPRECATION_WARNINGS.md** - Explanation of npm deprecation warnings during installation
 
 ## Quick Start
 

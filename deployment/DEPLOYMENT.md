@@ -49,6 +49,8 @@ cd /var/www/site-generator
 npm install --production
 ```
 
+**Note**: You may see deprecation warnings during installation (ESLint 8, rimraf, glob, etc.). These are expected and safe to ignore. See `DEPRECATION_WARNINGS.md` for details.
+
 ## Step 4: Configure Environment Variables
 
 ```bash
