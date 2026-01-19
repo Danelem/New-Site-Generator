@@ -28,7 +28,7 @@ import {
   extractJsonFromResponse,
 } from './prompts';
 import { rateLimiter } from './rateLimiter';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI } from './googleAI';
 
 /**
  * AI Model Provider Interface

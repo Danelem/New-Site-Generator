@@ -186,6 +186,16 @@ sudo chmod 600 /var/www/site-generator/.env.local
 
 ## Troubleshooting
 
+### Vercel: Module Not Found Error for @google/generative-ai
+
+If you're deploying to Vercel and getting `ERR_MODULE_NOT_FOUND` for `@google/generative-ai`:
+
+1. **Verify package-lock.json is committed** (it should be)
+2. **Check Vercel build logs** to ensure the package is being installed
+3. **Verify environment variables** are set in Vercel dashboard
+4. **Clear Vercel build cache** and redeploy
+5. See `VERCEL_TROUBLESHOOTING.md` for detailed steps
+
 ### Application Not Starting
 
 1. Check systemd logs:

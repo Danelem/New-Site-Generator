@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { createContentGenerator } from '@/lib/generator/ContentGenerator';
 import type { UserConfig } from '@/lib/generator/types';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI } from '@/lib/generator/googleAI';
 
 interface GenerateContentRequest {
   productName: string;
