@@ -1,0 +1,28 @@
+[Unit]
+Description=Site Generator Next.js Application
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/site-generator
+Environment=NODE_ENV=production
+Environment=PORT=3000
+EnvironmentFile=/var/www/site-generator/.env.local
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=site-generator
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/site-generator
+
+[Install]
+WantedBy=multi-user.target
