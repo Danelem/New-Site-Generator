@@ -126,7 +126,36 @@ export async function POST(request: NextRequest) {
     }
     
     // Get template field definitions using unified function
+    // This automatically filters out image and url slots (they don't need narrative content)
     const templateFields = getTemplateFields(template);
+    
+    // Validate that we have template fields to work with
+    if (!templateFields || templateFields.length === 0) {
+      const imageSlots = template.slots?.filter(s => s?.type === 'image').length || 0;
+      const urlSlots = template.slots?.filter(s => s?.type === 'url').length || 0;
+      const textSlots = (template.slots?.length || 0) - imageSlots - urlSlots;
+      
+      console.error('❌ No template fields found after processing:', {
+        templateId,
+        totalSlots: template.slots?.length || 0,
+        textSlots,
+        imageSlots,
+        urlSlots,
+        templateFieldsLength: templateFields?.length,
+        allSlots: template.slots,
+      });
+      
+      return Response.json(
+        { 
+          error: 'Failed to map narrative to slots',
+          details: `Template "${templateId}" has no valid text content slots. Found ${template.slots?.length || 0} total slots (${imageSlots} images, ${urlSlots} links, ${textSlots} text slots), but none are valid for content generation. Please ensure your template has text-based content slots (headings, paragraphs, lists) defined.`,
+          hint: `Image and URL slots are excluded from narrative mapping. You need at least one text, list, or rich-text slot.`,
+        },
+        { status: 400 }
+      );
+    }
+    
+    console.log(`✅ Found ${templateFields.length} content slots for mapping (excluded ${(template.slots?.length || 0) - templateFields.length} image/url slots)`);
 
     // Map narrative to slots
     const result = await generator.mapNarrativeToSlots({
@@ -136,11 +165,23 @@ export async function POST(request: NextRequest) {
     });
 
     if (!result.success) {
+      // Log the error details for debugging
+      console.error('❌ Mapping failed:', {
+        success: result.success,
+        error: result.error,
+        slotErrors: result.slotErrors,
+        templateFieldsCount: templateFields.length,
+        templateId,
+      });
+      
+      const errorDetails = result.error || 'Unknown error occurred during mapping';
+      
       return Response.json(
         { 
           error: 'Failed to map narrative to slots',
-          details: result.error || 'Unknown error',
+          details: errorDetails,
           slotErrors: result.slotErrors,
+          hint: 'Check server console logs for detailed error information.',
         },
         { status: 500 }
       );

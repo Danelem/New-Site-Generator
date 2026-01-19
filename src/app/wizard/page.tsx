@@ -433,6 +433,20 @@ function WizardPageContent() {
       setErrorMessage('Template not available. Please select a template in Step 1.');
         return false;
       }
+    
+    // Validate that template has slots
+    if (!selected.slots || selected.slots.length === 0) {
+      setErrorMessage('Template has no content slots defined. Please check your template configuration.');
+      return false;
+    }
+    
+    // Filter out invalid slots and check if any remain
+    const validSlots = selected.slots.filter(s => s && s.id && s.type);
+    if (validSlots.length === 0) {
+      setErrorMessage('Template has no valid content slots. Please ensure your template slots have valid id and type fields.');
+      return false;
+    }
+    
     setIsMappingToSlots(true);
     setErrorMessage(null);
     try {
@@ -458,13 +472,37 @@ function WizardPageContent() {
         }),
       });
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Failed to map narrative to slots' }));
-        setErrorMessage(errorData.error || 'Failed to map narrative to slots');
+        const errorData = await response.json().catch(() => ({ 
+          error: 'Failed to map narrative to slots',
+          details: `HTTP ${response.status}: ${response.statusText}`
+        }));
+        // Combine error message with details if available
+        const errorMsg = errorData.error || 'Failed to map narrative to slots';
+        const details = errorData.details || errorData.hint || '';
+        setErrorMessage(details ? `${errorMsg}. ${details}` : errorMsg);
           return false;
         }
       const result = await response.json();
       if (result.error) {
-        setErrorMessage(result.error);
+        // Combine error with details if available
+        const errorMsg = result.error;
+        const details = result.details || result.hint || '';
+        
+        // If details contains useful info, show it; otherwise just show the error
+        if (details && details !== 'Unknown error' && !details.includes('Unknown error occurred')) {
+          setErrorMessage(`${errorMsg}. ${details}`);
+        } else {
+          setErrorMessage(errorMsg);
+        }
+        
+        // Log to console for debugging
+        console.error('Map narrative to slots error:', {
+          error: errorMsg,
+          details,
+          slotErrors: result.slotErrors,
+          fullResult: result,
+        });
+        
         return false;
       }
       if (result.slots) {
@@ -498,7 +536,8 @@ function WizardPageContent() {
       return true;
     } catch (error) {
       console.error('Narrative mapping error:', error);
-      setErrorMessage('Failed to map narrative to slots.');
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      setErrorMessage(`Failed to map narrative to slots: ${errorMsg}. Check the browser console and server logs for more details.`);
       return false;
     } finally {
       setIsMappingToSlots(false);

@@ -24,9 +24,15 @@ export function getTemplateFields(template: TemplateConfig): TemplateFieldDefini
     return [];
   }
   
-  // Filter out any undefined/null slots and map to field definitions
+  // Filter out any undefined/null slots, image slots, and url slots (they don't need narrative content)
+  // Only include slots that need text content (text, list, rich-text)
   return template.slots
-    .filter((slot): slot is NonNullable<typeof slot> => slot != null && slot.id != null)
+    .filter((slot): slot is NonNullable<typeof slot> => 
+      slot != null && 
+      slot.id != null && 
+      slot.type !== 'image' && 
+      slot.type !== 'url' // Images and URLs don't need narrative mapping
+    )
     .map(slot => {
       const slotType = mapSlotType(slot.type || 'text');
     

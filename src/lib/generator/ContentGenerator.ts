@@ -130,10 +130,30 @@ export class GoogleGeminiProvider implements AIModelProvider {
       }
     }
     
-    // If all models failed
+    // If all models failed, throw a detailed error
+    let lastErrorMsg = 'All models failed';
+    if (lastError) {
+      if (lastError?.message) {
+        lastErrorMsg = lastError.message;
+      } else if (typeof lastError === 'string') {
+        lastErrorMsg = lastError;
+      } else if (lastError?.toString && typeof lastError.toString === 'function') {
+        const str = lastError.toString();
+        if (str !== '[object Object]') {
+          lastErrorMsg = str;
+        }
+      } else {
+        try {
+          lastErrorMsg = JSON.stringify(lastError);
+        } catch {
+          lastErrorMsg = 'Unknown error format';
+        }
+      }
+    }
+    
     throw new Error(
       `No available Gemini models found. Tried: ${modelNames.join(', ')}. ` +
-      `Last error: ${lastError?.message || 'All models failed'}`
+      `Last error: ${lastErrorMsg}`
     );
   }
 }
@@ -370,6 +390,16 @@ export class ContentGenerator {
     request: MapNarrativeToSlotsRequest
   ): Promise<MapNarrativeToSlotsResponse> {
     try {
+      console.log('📝 Starting narrative mapping...');
+      console.log('Request details:', {
+        hasTemplateFields: !!request.templateFields,
+        templateFieldsType: typeof request.templateFields,
+        templateFieldsLength: request.templateFields?.length,
+        hasCoreNarrative: !!request.coreNarrative,
+        narrativeLength: request.coreNarrative?.length,
+        hasUserConfig: !!request.userConfig,
+      });
+      
       // Validate template fields
       if (!request.templateFields || !Array.isArray(request.templateFields) || request.templateFields.length === 0) {
         throw new Error('No template fields provided or template fields array is empty');
@@ -387,6 +417,11 @@ export class ContentGenerator {
       console.log('📝 Mapping Core Narrative to Template Slots...');
       console.log(`Number of slots: ${validFields.length}`);
       console.log(`Slot IDs: ${validFields.map(f => f.slotId).join(', ')}`);
+      
+      // Check if API key is available
+      if (!this.modelConfig.apiKey) {
+        throw new Error('GOOGLE_AI_API_KEY is not set. Please configure it in your environment variables.');
+      }
 
       // Use validFields for the prompt and processing
       const prompt = buildMapNarrativeToSlotsPrompt({
@@ -509,44 +544,93 @@ export class ContentGenerator {
       };
     } catch (error: any) {
       console.error('❌ Narrative Mapping Failed:', error);
-      console.error('Error details:', {
-        message: error?.message,
+      
+      // Extract error information from various possible error formats
+      let errorMessage: string | undefined;
+      let errorDetails: any = {};
+      
+      // Try to extract error message from various formats
+      if (error?.message) {
+        errorMessage = error.message;
+      } else if (error?.error?.message) {
+        errorMessage = error.error.message;
+      } else if (error?.statusText) {
+        errorMessage = error.statusText;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      } else if (error?.toString && typeof error.toString === 'function') {
+        const errorStr = error.toString();
+        if (errorStr !== '[object Object]') {
+          errorMessage = errorStr;
+        }
+      }
+      
+      // Extract additional error details
+      errorDetails = {
+        message: error?.message || error?.error?.message,
         name: error?.name,
+        status: error?.status || error?.response?.status,
+        statusText: error?.statusText || error?.response?.statusText,
+        code: error?.code,
+        response: error?.response?.data || error?.response,
         stack: error?.stack,
         error: error,
         errorType: typeof error,
         errorString: String(error),
-      });
+        errorJSON: (() => {
+          try {
+            return JSON.stringify(error, Object.getOwnPropertyNames(error));
+          } catch {
+            return 'Could not stringify error';
+          }
+        })(),
+      };
+      
+      console.error('Error details:', errorDetails);
       
       // Provide more specific error messages
-      let errorMessage = 'Failed to map narrative to slots';
+      let finalErrorMessage = 'Failed to map narrative to slots';
       
       // Handle different error types
-      const errorStr = error?.message || error?.toString() || String(error) || 'Unknown error';
+      const errorStr = errorMessage || String(error) || 'Unknown error';
       
-      if (errorStr.includes('429') || errorStr.includes('rate limit') || errorStr.includes('Too Many Requests')) {
-        errorMessage = 'API rate limit exceeded. Please wait a few minutes and try again.';
-      } else if (errorStr.includes('timeout') || errorStr.includes('ETIMEDOUT')) {
-        errorMessage = 'Request timed out. The narrative might be too long. Please try again.';
+      if (errorStr.includes('429') || errorStr.includes('rate limit') || errorStr.includes('Too Many Requests') || errorDetails.status === 429 || errorDetails.code === 429) {
+        finalErrorMessage = 'API rate limit exceeded. Please wait a few minutes and try again.';
+      } else if (errorStr.includes('timeout') || errorStr.includes('ETIMEDOUT') || errorStr.includes('Timeout')) {
+        finalErrorMessage = 'Request timed out. The narrative might be too long. Please try again.';
       } else if (errorStr.includes('quota') || errorStr.includes('quota exceeded')) {
-        errorMessage = 'API quota exceeded. Please check your Google AI API quota.';
-      } else if (errorStr.includes('401') || errorStr.includes('403') || errorStr.includes('authentication') || errorStr.includes('API key')) {
-        errorMessage = 'API authentication failed. Please check your GOOGLE_AI_API_KEY.';
-      } else if (errorStr.includes('404') || errorStr.includes('not found')) {
-        errorMessage = 'AI model not found. Please check your API key has access to Gemini models.';
-      } else if (errorStr.includes('network') || errorStr.includes('fetch') || errorStr.includes('ECONNREFUSED')) {
-        errorMessage = 'Network error. Please check your internet connection and try again.';
-      } else if (errorStr && errorStr !== 'Unknown error' && errorStr !== '[object Object]') {
-        errorMessage = errorStr;
+        finalErrorMessage = 'API quota exceeded. Please check your Google AI API quota.';
+      } else if (errorStr.includes('401') || errorStr.includes('403') || errorStr.includes('authentication') || errorStr.includes('API key') || errorStr.includes('permission') || errorDetails.status === 401 || errorDetails.status === 403) {
+        finalErrorMessage = 'API authentication failed. Please check your GOOGLE_AI_API_KEY environment variable is set correctly.';
+      } else if (errorStr.includes('404') || errorStr.includes('not found') || errorDetails.status === 404) {
+        finalErrorMessage = 'AI model not found. Please check your API key has access to Gemini models.';
+      } else if (errorStr.includes('network') || errorStr.includes('fetch') || errorStr.includes('ECONNREFUSED') || errorStr.includes('ENOTFOUND')) {
+        finalErrorMessage = 'Network error. Please check your internet connection and try again.';
+      } else if (errorStr && errorStr !== 'Unknown error' && errorStr !== '[object Object]' && errorStr.length < 500) {
+        // Use the error message if it's meaningful and not too long
+        finalErrorMessage = errorStr;
       } else {
-        // Fallback: provide more context
-        errorMessage = `Failed to map narrative to slots. ${error?.name ? `Error type: ${error.name}. ` : ''}Check server console for details.`;
+        // Fallback: provide more context based on what we found
+        const errorType = error?.name || errorDetails.name || typeof error;
+        const statusInfo = errorDetails.status ? ` (HTTP ${errorDetails.status})` : '';
+        const errorDesc = errorMessage && errorMessage.length < 200 ? `: ${errorMessage}` : '';
+        
+        if (errorType && errorType !== 'object' && errorType !== 'Object') {
+          finalErrorMessage = `Failed to map narrative to slots. Error type: ${errorType}${statusInfo}${errorDesc}. Check server console for full details.`;
+        } else {
+          finalErrorMessage = `Failed to map narrative to slots. An unexpected error occurred${statusInfo}. Check server console for full details.`;
+        }
+      }
+      
+      // Ensure we always return a non-empty error message
+      if (!finalErrorMessage || finalErrorMessage.trim().length === 0) {
+        finalErrorMessage = `Failed to map narrative to slots. An unexpected error occurred. Check server console for details.`;
       }
       
       return {
         slots: {},
         success: false,
-        error: errorMessage,
+        error: finalErrorMessage,
       };
     }
   }
