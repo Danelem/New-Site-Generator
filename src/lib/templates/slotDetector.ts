@@ -2,20 +2,18 @@
  * Slot Detection Utility
  * Automatically detects content slots in HTML templates
  * Used during template extraction and editing
+ * 
+ * IMPORTANT: This preserves the original HTML structure exactly.
+ * We only add data-slot attributes - we do NOT change the original HTML tags.
  */
 
 import type { TemplateSlot } from "./uploadedTypes";
 
-interface SlotElement {
-  element: Element;
-  type: TemplateSlot["type"];
-  label: string;
-  index: number;
-}
-
 /**
  * Automatically detect and mark all content slots in HTML
  * Returns the updated HTML with data-slot attributes and the detected slots
+ * 
+ * This matches the original TemplateUploadPanel logic to ensure compatibility.
  */
 export function detectSlots(htmlBody: string): { 
   htmlBody: string; 
@@ -25,254 +23,226 @@ export function detectSlots(htmlBody: string): {
   const doc = parser.parseFromString(htmlBody, "text/html");
   const body = doc.body;
 
-  // Remove existing data-slot attributes first
-  body.querySelectorAll("[data-slot]").forEach(el => {
-    el.removeAttribute("data-slot");
-  });
-
-  const textElements: { element: Element; type: string; label: string; index: number }[] = [];
-  const processedElements = new Set<Element>();
-  
-  const isAlreadyProcessed = (el: Element): boolean => {
-    if (processedElements.has(el)) return true;
-    for (const processed of processedElements) {
-      if (processed.contains(el)) return true;
-    }
-    return false;
-  };
-
   const getTextPreview = (text: string, maxLen: number = 40): string => {
     const trimmed = text.trim();
     if (trimmed.length === 0) return "";
     return trimmed.length > maxLen ? trimmed.substring(0, maxLen) + "..." : trimmed;
   };
 
-  // 1. Find all headings in document order and group content between them
-  const allHeadings = Array.from(body.querySelectorAll("h1, h2, h3, h4, h5, h6"))
-    .filter(h => h.textContent?.trim().length > 0);
+  // Find all content elements in document order (headings, paragraphs, lists, images)
+  // Process them individually to preserve exact structure
+  const processedElements = new Set<Element>();
+  const slots: { element: Element; label: string; index: number; type: TemplateSlot["type"] }[] = [];
   
-  for (let i = 0; i < allHeadings.length; i++) {
-    const heading = allHeadings[i];
-    if (isAlreadyProcessed(heading)) continue;
+  // Counters for descriptive labeling - track each heading level separately
+  let h1Count = 0;
+  let h2Count = 0;
+  let h3Count = 0;
+  let h4Count = 0;
+  let h5Count = 0;
+  let h6Count = 0;
+  let paragraphCount = 0;
+  let listCount = 0;
+  let imageCount = 0;
+  let slotIndex = 0;
 
-    const headingText = heading.textContent?.trim() || "";
-    const nextHeading = i < allHeadings.length - 1 ? allHeadings[i + 1] : null;
+  // Walk through all elements in document order
+  // IMPORTANT: Process individual elements (headings, paragraphs, lists) FIRST
+  // Only treat containers as content blocks if they don't contain already-processed elements
+  const walkElements = (parent: Element) => {
+    const children = Array.from(parent.children);
     
-    // Collect all content elements between this heading and the next heading
-    const sectionElements: Element[] = [];
-    let currentEl: Node | null = heading;
-    
-    // Walk through siblings after the heading
-    while (currentEl && currentEl.nextSibling) {
-      currentEl = currentEl.nextSibling;
+    for (const el of children) {
+      if (processedElements.has(el)) continue;
       
-      if (currentEl.nodeType !== Node.ELEMENT_NODE) continue;
-      
-      const el = currentEl as Element;
-      
-      // Stop if we hit the next heading
-      if (nextHeading && (el === nextHeading || el.contains(nextHeading))) {
-        break;
-      }
-      
-      // Check if this is a content element
       const tag = el.tagName.toUpperCase();
-      const isContentElement = 
-        tag === "P" || tag === "UL" || tag === "OL" || 
-        tag === "IMG" || tag === "BLOCKQUOTE" || 
-        tag === "DIV" || tag === "ARTICLE" || tag === "SECTION";
+      const text = el.textContent?.trim() || "";
       
-      if (isContentElement && !isAlreadyProcessed(el)) {
-        const text = el.textContent?.trim() || "";
-        // For paragraphs, require minimum text length
-        if (tag === "P" && text.length < 10) continue;
-        // Include images and elements with text
-        if (tag === "IMG" || text.length > 0) {
-          sectionElements.push(el);
-          processedElements.add(el);
+      // Skip empty elements and non-content elements
+      if (text.length === 0 && tag !== "IMG") {
+        // Recursively process children
+        walkElements(el);
+        continue;
+      }
+      
+      // Process headings individually FIRST (before checking containers)
+      // PRESERVE ORIGINAL TAG: If original has <h1>, keep it as <h1>. If <h2>, keep as <h2>, etc.
+      // Label clearly shows the tag type so user knows exactly which section they're editing
+      if (tag.match(/^H[1-6]$/)) {
+        const level = parseInt(tag[1]);
+        let label = "";
+        
+        if (level === 1) {
+          h1Count++;
+          label = `H1 Heading ${h1Count}`;
+        } else if (level === 2) {
+          h2Count++;
+          label = `H2 Subheading ${h2Count}`;
+        } else if (level === 3) {
+          h3Count++;
+          label = `H3 Section Header ${h3Count}`;
+        } else if (level === 4) {
+          h4Count++;
+          label = `H4 Subsection ${h4Count}`;
+        } else if (level === 5) {
+          h5Count++;
+          label = `H5 Minor Header ${h5Count}`;
+        } else {
+          h6Count++;
+          label = `H6 Minor Header ${h6Count}`;
         }
-      }
-    }
-
-    // Create container for this section
-    let container: Element;
-    
-    if (sectionElements.length > 0) {
-      // Create a wrapper div
-      container = doc.createElement("div");
-      container.className = "template-section-group";
-      
-      const parent = heading.parentElement;
-      if (parent) {
-        // Insert container before the heading
-        parent.insertBefore(container, heading);
         
-        // Move heading into container
-        container.appendChild(heading);
-        
-        // Move all content elements into container
-        sectionElements.forEach(el => {
-          container.appendChild(el);
+        // Store the original element - its tag (H1, H2, H3, etc.) will be preserved exactly
+        slots.push({
+          element: el,
+          label: label,
+          index: slotIndex++,
+          type: "text"
         });
+        processedElements.add(el);
+        continue; // Don't process children of headings
       }
-    } else {
-      // No content, just use the heading itself
-      container = heading;
-    }
-
-    processedElements.add(heading);
-    
-    const tagName = heading.tagName.toLowerCase();
-    const level = parseInt(tagName[1]);
-    let label = "";
-    
-    // Use descriptive labeling for headings
-    if (level === 1) {
-      const h1Idx = textElements.filter(te => te.type === "h1").length;
-      label = `H1 Heading ${h1Idx + 1}`;
-    } else if (level === 2) {
-      const h2Idx = textElements.filter(te => te.type === "h2").length;
-      label = `H2 Subheading ${h2Idx + 1}`;
-    } else if (level === 3) {
-      const h3Idx = textElements.filter(te => te.type === "h3").length;
-      label = `H3 Section Header ${h3Idx + 1}`;
-    } else if (level === 4) {
-      const h4Idx = textElements.filter(te => te.type === "h4").length;
-      label = `H4 Subsection ${h4Idx + 1}`;
-    } else if (level === 5) {
-      const h5Idx = textElements.filter(te => te.type === "h5").length;
-      label = `H5 Minor Header ${h5Idx + 1}`;
-    } else {
-      const h6Idx = textElements.filter(te => te.type === "h6").length;
-      label = `H6 Minor Header ${h6Idx + 1}`;
-    }
-    
-    textElements.push({
-      element: container,
-      type: tagName, // Store the actual tag type (h1, h2, h3, etc.)
-      label: label,
-      index: textElements.length
-    });
-  }
-
-  // 2. Find all lists
-  const lists = body.querySelectorAll("ul, ol");
-  lists.forEach((list) => {
-    const text = list.textContent?.trim() || "";
-    if (text.length > 0 && !isAlreadyProcessed(list)) {
-      const idx = textElements.filter(te => te.type === "list").length;
-      textElements.push({
-        element: list,
-        type: "list",
-        label: `${list.tagName.toUpperCase()} List ${idx + 1}`,
-        index: idx
-      });
-      processedElements.add(list);
-    }
-  });
-
-  // 3. Find all images (img tags)
-  const images = body.querySelectorAll("img");
-  images.forEach((el) => {
-    if (isAlreadyProcessed(el)) return;
-    
-    const alt = el.getAttribute("alt") || "";
-    const src = el.getAttribute("src") || "";
-    const idx = textElements.filter(te => te.type === "image").length;
-    const label = alt || src || `Image ${idx + 1}`;
-    
-    textElements.push({
-      element: el,
-      type: "image",
-      label: `Image ${idx + 1}: ${label.length > 40 ? label.substring(0, 40) + "..." : label}`,
-      index: idx
-    });
-    processedElements.add(el);
-  });
-
-  // 4. Find all links (a tags)
-  const links = body.querySelectorAll("a[href]");
-  links.forEach((el) => {
-    if (isAlreadyProcessed(el)) return;
-    
-    const href = el.getAttribute("href") || "";
-    const text = el.textContent?.trim() || "";
-    if (href && (href.startsWith("http") || href.startsWith("/") || href.startsWith("#"))) {
-      const idx = textElements.filter(te => te.type === "url").length;
-      textElements.push({
-        element: el,
-        type: "url",
-        label: `Link ${idx + 1}: ${text || href}`,
-        index: idx
-      });
-      processedElements.add(el);
-    }
-  });
-
-  // 5. Find divs with text content
-  const divs = body.querySelectorAll("div");
-  divs.forEach((el) => {
-    if (isAlreadyProcessed(el)) return;
-    
-    const text = el.textContent?.trim() || "";
-    if (text.length < 20) return;
-    
-    const childCount = el.children.length;
-    const hasDirectText = Array.from(el.childNodes).some(
-      node => node.nodeType === Node.TEXT_NODE && node.textContent && node.textContent.trim().length > 0
-    );
-    
-    let containsProcessed = false;
-    for (const processed of processedElements) {
-      if (el.contains(processed) && el !== processed) {
-        containsProcessed = true;
-        break;
+      // Process paragraphs individually FIRST
+      // PRESERVE ORIGINAL TAG: If original has <p>, keep it as <p>
+      else if (tag === "P" && text.length >= 10) {
+        paragraphCount++;
+        const label = `Paragraph ${paragraphCount}`;
+        
+        // Store the original element - its tag (P) will be preserved exactly
+        slots.push({
+          element: el,
+          label: label,
+          index: slotIndex++,
+          type: "text"
+        });
+        processedElements.add(el);
+        continue; // Don't process children of paragraphs
+      }
+      // Process lists individually FIRST
+      else if (tag === "UL" || tag === "OL") {
+        listCount++;
+        const label = `List ${listCount}`;
+        
+        slots.push({
+          element: el,
+          label: label,
+          index: slotIndex++,
+          type: "list"
+        });
+        processedElements.add(el);
+        continue; // Don't process children of lists
+      }
+      // Process images individually FIRST
+      else if (tag === "IMG") {
+        imageCount++;
+        const label = `Image ${imageCount}`;
+        
+        slots.push({
+          element: el,
+          label: label,
+          index: slotIndex++,
+          type: "image"
+        });
+        processedElements.add(el);
+        continue; // Images don't have children
+      }
+      // For DIV, SECTION, ARTICLE - check if it's a content-rich container
+      // BUT only if it doesn't contain already-processed individual elements
+      else if (tag === "DIV" || tag === "SECTION" || tag === "ARTICLE") {
+        // Check if this container has any already-processed individual elements
+        const hasProcessedChildren = Array.from(el.querySelectorAll("h1, h2, h3, h4, h5, h6, p, ul, ol, img")).some(
+          child => processedElements.has(child)
+        );
+        
+        // If it has processed children, just recursively process the remaining children
+        if (hasProcessedChildren) {
+          walkElements(el);
+          continue;
+        }
+        
+        // Check if this container has substantial content (multiple paragraphs, headings, etc.)
+        const hasHeadings = el.querySelector("h1, h2, h3, h4, h5, h6");
+        const paragraphs = el.querySelectorAll("p");
+        const hasMultipleParagraphs = paragraphs.length >= 2;
+        const hasLists = el.querySelector("ul, ol");
+        const directText = Array.from(el.childNodes)
+          .filter(node => node.nodeType === Node.TEXT_NODE)
+          .map(node => node.textContent?.trim())
+          .join(" ")
+          .trim();
+        
+        // Only treat as content block if it's a SMALL, self-contained section
+        // (like a product review card, not the entire page)
+        // Criteria: Has heading + multiple paragraphs, BUT also check it's not too large
+        // We want to avoid treating the entire page as one content block
+        const childElementCount = el.children.length;
+        const isSmallContainer = childElementCount <= 10; // Reasonable size for a content block
+        
+        const isContentBlock = isSmallContainer && (
+          (hasHeadings && hasMultipleParagraphs && paragraphs.length <= 5) || // Small card with heading + few paragraphs
+          (hasMultipleParagraphs && paragraphs.length >= 3 && paragraphs.length <= 5) || // Small section with few paragraphs
+          (directText.length >= 100 && directText.length < 500 && !hasHeadings && paragraphs.length === 0) // Small text block
+        );
+        
+        if (isContentBlock) {
+          // This is a small content block (like a product review card)
+          paragraphCount++; // Reuse paragraph counter for content blocks
+          const headingText = hasHeadings 
+            ? getTextPreview(hasHeadings.textContent || "", 30)
+            : "";
+          const label = headingText 
+            ? `Content Block ${paragraphCount}: ${headingText}`
+            : `Content Block ${paragraphCount}`;
+          
+          slots.push({
+            element: el,
+            label: label,
+            index: slotIndex++,
+            type: "text"
+          });
+          processedElements.add(el);
+          // Mark all children as processed so they don't get extracted separately
+          el.querySelectorAll("*").forEach(child => processedElements.add(child));
+        } else {
+          // Not a content block, recursively process children to find individual elements
+          walkElements(el);
+        }
+      } else {
+        // For other tags, recursively process children
+        walkElements(el);
       }
     }
-    
-    if (!containsProcessed && (
-      (text.length >= 30 && (hasDirectText || childCount <= 8)) ||
-      text.length >= 100
-    )) {
-      const idx = textElements.filter(te => te.type === "div").length;
-      textElements.push({
-        element: el,
-        type: "div",
-        label: `Content Block ${idx + 1}: ${getTextPreview(text, 50)}`,
-        index: idx
-      });
-      processedElements.add(el);
-    }
-  });
+  };
+  
+  // Start walking from body
+  walkElements(body);
 
   // Add data-slot attributes and create template slots
-  const slots: TemplateSlot[] = [];
-  textElements.forEach((item) => {
-    const slotId = `section_${item.type}_${item.index}`;
-    item.element.setAttribute("data-slot", slotId);
+  // IMPORTANT: We only add data-slot attributes - we do NOT change the original HTML tags
+  // If original has <h1>, it stays <h1>. If original has <h2>, it stays <h2>. If original has <p>, it stays <p>.
+  // The structure and tag types are preserved exactly as they appear in the source.
+  const templateSlots: TemplateSlot[] = [];
+  slots.forEach((slot) => {
+    // Use the original slot ID format: slot_0, slot_1, etc.
+    const slotId = `slot_${slot.index}`;
     
-    let slotType: TemplateSlot["type"] = "text";
-    if (item.type === "ul" || item.type === "ol" || item.type === "list") {
-      slotType = "list";
-    } else if (item.type === "image" || item.element.tagName === "IMG") {
-      slotType = "image";
-    } else if (item.type === "url" || item.element.tagName === "A") {
-      slotType = "url";
-    } else if (item.type === "section") {
-      // Section containers are text type (can contain paragraphs, lists, etc.)
-      slotType = "text";
-    }
+    // Add data-slot attribute to the element WITHOUT changing its tag or structure
+    // Original tag (H1, H2, H3, P, UL, etc.) is preserved exactly
+    slot.element.setAttribute("data-slot", slotId);
 
-    slots.push({
+    templateSlots.push({
       id: slotId,
-      type: slotType,
-      label: item.label
+      type: slot.type,
+      label: slot.label
     });
   });
 
-  // Return updated HTML and slots
+  // Get the HTML with data-slot attributes added, but original tags preserved
+  // H1 stays H1, H2 stays H2, P stays P - exact format of original source template
+  const updatedHtmlBody = body.innerHTML;
+
   return {
-    htmlBody: body.innerHTML,
-    slots
+    htmlBody: updatedHtmlBody,
+    slots: templateSlots
   };
 }

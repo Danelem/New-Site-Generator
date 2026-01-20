@@ -483,29 +483,13 @@ function WizardPageContent() {
           return false;
         }
       const result = await response.json();
-      if (result.error) {
-        // Combine error with details if available
-        const errorMsg = result.error;
-        const details = result.details || result.hint || '';
-        
-        // If details contains useful info, show it; otherwise just show the error
-        if (details && details !== 'Unknown error' && !details.includes('Unknown error occurred')) {
-          setErrorMessage(`${errorMsg}. ${details}`);
-        } else {
-          setErrorMessage(errorMsg);
-        }
-        
-        // Log to console for debugging
-        console.error('Map narrative to slots error:', {
-          error: errorMsg,
-          details,
-          slotErrors: result.slotErrors,
-          fullResult: result,
-        });
-        
-        return false;
-      }
-      if (result.slots) {
+      
+      // Check if we have any slots mapped (even if there are errors)
+      const hasSlots = result.slots && Object.keys(result.slots).length > 0;
+      const hasSlotErrors = result.slotErrors && Object.keys(result.slotErrors || {}).length > 0;
+      
+      // If we have slots, use them even if there are errors (partial success)
+      if (hasSlots) {
           setData(prev => {
             const newSlotData = { ...prev.slotData || {} };
           Object.keys(result.slots).forEach(slotId => {
@@ -531,9 +515,63 @@ function WizardPageContent() {
           });
           return { ...prev, slotData: newSlotData };
           });
+        
+        // Show warnings for slot errors but don't block progression
+        if (hasSlotErrors) {
+          const errorCount = Object.keys(result.slotErrors).length;
+          const successCount = Object.keys(result.slots).length;
+          
+          // Get template to find slot labels
+          const selected = getSelectedTemplate();
+          
+          // Build detailed error message with slot names and reasons
+          const failedSlots = Object.entries(result.slotErrors).map(([slotId, errorMsg]) => {
+            const slot = selected?.slots.find(s => s.id === slotId);
+            const slotLabel = slot?.label || slotId;
+            return `• ${slotLabel}: ${errorMsg}`;
+          }).join('\n');
+          
+          setErrorMessage(
+            `⚠️ Mapped ${successCount} slot(s) successfully, but ${errorCount} slot(s) failed:\n\n${failedSlots}\n\n` +
+            `You can proceed to Step 4 and fill the failed slots manually, or try regenerating them individually.`
+          );
+          
+          // Also log to console for debugging
+          console.warn('Failed slots details:', result.slotErrors);
+        } else if (result.warning) {
+          // Show warning from API but allow progression
+          setErrorMessage(result.warning);
+        } else {
+          // Full success - clear any previous errors
+          setErrorMessage(null);
         }
-      setErrorMessage(null);
-      return true;
+        
+        // Always allow progression if we have at least some slots mapped
+        return true;
+      }
+      
+      // No slots at all - this is a real failure
+      if (result.error) {
+        const errorMsg = result.error;
+        const details = result.details || result.hint || '';
+        
+        if (details && details !== 'Unknown error' && !details.includes('Unknown error occurred')) {
+          setErrorMessage(`${errorMsg}. ${details}`);
+        } else {
+          setErrorMessage(errorMsg);
+        }
+        
+        console.error('Map narrative to slots error:', {
+          error: errorMsg,
+          details,
+          slotErrors: result.slotErrors,
+          fullResult: result,
+        });
+      } else {
+        setErrorMessage('No slots were mapped. Please check your template configuration and try again.');
+      }
+      
+      return false;
     } catch (error) {
       console.error('Narrative mapping error:', error);
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -1077,7 +1115,7 @@ function WizardPageContent() {
                       {isGeneratingCoreNarrative ? 'Generating Master Narrative...' : 'Generate Master Narrative'}
                     </button>
                     {errorMessage && (
-                      <p className="text-sm text-red-600 mt-2">{errorMessage}</p>
+                      <div className="text-sm text-red-600 mt-2 whitespace-pre-line">{errorMessage}</div>
                     )}
                   </div>
                   <div>
@@ -1157,7 +1195,7 @@ function WizardPageContent() {
                   
                   {errorMessage && (
                     <div className="mb-6">
-                      <p className="text-sm text-red-600">{errorMessage}</p>
+                      <div className="text-sm text-red-600 whitespace-pre-line">{errorMessage}</div>
                     </div>
                   )}
 

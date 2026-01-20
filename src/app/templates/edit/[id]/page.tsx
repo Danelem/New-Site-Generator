@@ -53,33 +53,46 @@ export default function EditTemplatePage({ params }: { params: { id: string } })
   const handleSave = () => {
     if (!template) return;
 
-    // Re-parse HTML to extract slots (in case user manually added data-slot)
+    // First, check if there are existing data-slot attributes
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlBody, "text/html");
     const body = doc.body;
-
     const slotElements = body.querySelectorAll("[data-slot]");
-    const slots: TemplateSlot[] = [];
-    slotElements.forEach((el) => {
-      const id = el.getAttribute("data-slot");
-      if (!id) return;
-      if (slots.some((s) => s.id === id)) return;
+    
+    let slots: TemplateSlot[] = [];
+    let finalHtmlBody = htmlBody;
+    
+    // If slots exist, extract them (preserve user's manual edits)
+    if (slotElements.length > 0) {
+      slotElements.forEach((el) => {
+        const id = el.getAttribute("data-slot");
+        if (!id) return;
+        if (slots.some((s) => s.id === id)) return;
 
-      const label = id
-        .replace(/_/g, " ")
-        .replace(/\b\w/g, (c) => c.toUpperCase());
+        const label = id
+          .replace(/_/g, " ")
+          .replace(/\b\w/g, (c) => c.toUpperCase());
 
-      let type: TemplateSlot["type"] = "text";
-      if (el.tagName === "UL" || el.tagName === "OL") type = "list";
-      if (el.tagName === "IMG") type = "image";
-      if (el.tagName === "A") type = "url";
+        let type: TemplateSlot["type"] = "text";
+        if (el.tagName === "UL" || el.tagName === "OL") type = "list";
+        if (el.tagName === "IMG") type = "image";
+        if (el.tagName === "A") type = "url";
 
-      slots.push({ id, type, label });
-    });
+        slots.push({ id, type, label });
+      });
+    } else {
+      // No slots found - automatically detect them
+      // This ensures slots are always available after saving
+      const result = detectSlots(htmlBody);
+      slots = result.slots;
+      finalHtmlBody = result.htmlBody;
+      // Update htmlBody state with data-slot attributes
+      setHtmlBody(result.htmlBody);
+    }
 
     const updated: UploadedTemplate = {
       ...template,
-      htmlBody,
+      htmlBody: finalHtmlBody,
       css: css || undefined,
       slots,
     };
@@ -140,10 +153,19 @@ export default function EditTemplatePage({ params }: { params: { id: string } })
       <div className="max-w-7xl mx-auto px-6 py-8">
         {saved && (
           <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-md text-green-800 text-sm">
-            {template.slots.length > 0 
-              ? `Template saved successfully! ${template.slots.length} editable section(s) detected.`
-              : 'Template saved successfully!'
-            }
+            {template.slots.length > 0 ? (() => {
+              const textSlots = template.slots.filter(s => s.type === 'text' || s.type === 'list' || s.type === 'rich-text').length;
+              const imageSlots = template.slots.filter(s => s.type === 'image').length;
+              const urlSlots = template.slots.filter(s => s.type === 'url').length;
+              const totalSlots = template.slots.length;
+              
+              const parts: string[] = [];
+              if (textSlots > 0) parts.push(`${textSlots} text slot${textSlots !== 1 ? 's' : ''}`);
+              if (imageSlots > 0) parts.push(`${imageSlots} image slot${imageSlots !== 1 ? 's' : ''}`);
+              if (urlSlots > 0) parts.push(`${urlSlots} link slot${urlSlots !== 1 ? 's' : ''}`);
+              
+              return `Template saved successfully! ${totalSlots} editable section${totalSlots !== 1 ? 's' : ''} detected (${parts.join(', ')}).`;
+            })() : 'Template saved successfully! No editable sections detected. Click "Auto-Detect All Text Sections" to automatically detect content slots.'}
           </div>
         )}
 

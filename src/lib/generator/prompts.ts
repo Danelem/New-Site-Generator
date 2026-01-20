@@ -208,9 +208,14 @@ export function buildMapNarrativeToSlotsPrompt(request: MapNarrativeToSlotsReque
       desc += ` [Note: ${field.instructions}]`;
     }
     
-    // Add structure context based on label - match exact tag types from original template
+    // Add structure context based on label and slot type - match exact tag types from original template
     const labelLower = field.label.toLowerCase();
-    if (labelLower.startsWith('h1 heading ')) {
+    const slotTypeLower = field.slotType.toLowerCase();
+    
+    // Check slot type first (more reliable than label parsing)
+    if (slotTypeLower === 'list') {
+      desc += ` [STRUCTURE: This is a LIST (UL or OL tag) - format as one item per line. Each line should be a complete bullet point or list item. Extract 3-8 key points from the narrative. REQUIRED - you must provide content for this slot.]`;
+    } else if (labelLower.startsWith('h1 heading ')) {
       // H1 Heading 1, H1 Heading 2, etc. - these are H1 elements
       desc += ` [STRUCTURE: This is an H1 HEADING - must be ONE LINE only, concise and attention-grabbing. Do NOT include paragraph text. Preserve the H1 tag structure.]`;
     } else if (labelLower.startsWith('h2 subheading ')) {
@@ -225,8 +230,11 @@ export function buildMapNarrativeToSlotsPrompt(request: MapNarrativeToSlotsReque
     } else if (labelLower.startsWith('paragraph ')) {
       // Paragraph 1, Paragraph 2, etc. - these are P elements
       desc += ` [STRUCTURE: This is a PARAGRAPH (P tag) - must be a FULL PARAGRAPH with multiple sentences. This is NOT a heading. Preserve the P tag structure.]`;
-    } else if (labelLower.startsWith('list ')) {
-      desc += ` [STRUCTURE: This is a LIST - format as one item per line]`;
+    } else if (labelLower.startsWith('list ') || labelLower.includes(' list ')) {
+      // Catch "List 1", "UL List 1", "OL List 1", etc.
+      desc += ` [STRUCTURE: This is a LIST (UL or OL tag) - format as one item per line. Each line should be a complete bullet point or list item. Extract 3-8 key points from the narrative. REQUIRED - you must provide content for this slot.]`;
+    } else if (labelLower.startsWith('content block ')) {
+      desc += ` [STRUCTURE: This is a CONTENT BLOCK - extract multiple sentences or a full paragraph from the narrative that fits this section. REQUIRED - you must provide content for this slot.]`;
     } else if (labelLower.startsWith('image ')) {
       desc += ` [STRUCTURE: This is an IMAGE - provide a URL or image data]`;
     }
@@ -242,6 +250,12 @@ ${coreNarrative}
 **Template Fields to Fill (with structure requirements):**
 ${enhancedFieldDescriptions}
 
+**IMPORTANT: You must provide content for ALL ${templateFields.length} slots listed above.**
+- Text slots (headings, paragraphs) = extract text content
+- List slots = extract 3-8 key points, one per line
+- Content blocks = extract multiple sentences
+- **DO NOT skip any slots, especially lists or content blocks**
+
 **Target Audience:** ${userConfig.ageRange || 'all'} ${userConfig.gender || 'all'}${userConfig.country ? ` in ${userConfig.country}` : ''}${userConfig.targetStates && userConfig.targetStates.length > 0 ? ` (psychographic profile: ${userConfig.targetStates.join(', ')})` : ''}
 **Tone:** ${userConfig.tone}
 **Main Keyword:** ${userConfig.mainKeyword}
@@ -250,24 +264,67 @@ ${userConfig.targetStates && userConfig.targetStates.length > 0
   : ''}
 
 **CRITICAL REQUIREMENTS:**
-1. Extract content from the Core Narrative for each field. Do NOT create new content that isn't in the narrative.
-2. PRESERVE STRUCTURE: If a slot is labeled as "Headline" or "H1", it should be ONE LINE only. If it's "Paragraph" or "Body", it should be a full paragraph.
-3. For headings (H1, H2, H3, etc.), extract or create a SINGLE LINE that captures the essence. Do NOT include paragraph text in headings.
-4. For paragraphs, extract or adapt full paragraph content with multiple sentences.
-5. Maintain consistency - all fields should align with the same narrative thread.
-6. Respect length constraints where specified.
-7. Use the exact slot IDs provided as keys in your response.
-8. **CRITICAL: DO NOT include HTML tags in your response.** Return ONLY plain text content. The template already has the HTML structure (H1, H2, P tags). You should provide just the text that goes inside those tags. For example, return "My Heading Text" NOT "<h1>My Heading Text</h1>".
+1. **YOU MUST INCLUDE ALL ${templateFields.length} SLOTS IN YOUR RESPONSE.** Every slot ID listed above must have a value in your JSON response. Do NOT skip any slots, especially lists or content blocks.
+2. Extract content from the Core Narrative for each field. Do NOT create new content that isn't in the narrative.
+3. PRESERVE STRUCTURE: If a slot is labeled as "Headline" or "H1", it should be ONE LINE only. If it's "Paragraph" or "Body", it should be a full paragraph.
+4. For headings (H1, H2, H3, etc.), extract or create a SINGLE LINE that captures the essence. Do NOT include paragraph text in headings.
+5. For paragraphs, extract or adapt full paragraph content with multiple sentences.
+6. **For lists (type: list, labels like "List 1", "UL List 1", "OL List 1"):** 
+   - Extract 3-8 key points from the narrative
+   - Format as one item per line (each line is a bullet point)
+   - Each line should be a complete sentence or phrase
+   - Example format:
+     "Key benefit 1 from narrative
+     Key benefit 2 from narrative
+     Key benefit 3 from narrative"
+   - If the narrative doesn't have enough list items, extract and adapt related points from the narrative
+   - **DO NOT skip list slots - they are required**
+7. **For content blocks:** Extract the main content from the narrative that fits that section. This can be multiple sentences or paragraphs combined. **DO NOT skip content blocks - they are required**
+8. Maintain consistency - all fields should align with the same narrative thread.
+9. Respect length constraints where specified.
+10. Use the exact slot IDs provided as keys in your response. **DO NOT use different slot IDs or skip any slots.**
+11. **CRITICAL: DO NOT include HTML tags in your response.** Return ONLY plain text content. The template already has the HTML structure (H1, H2, P, UL, OL tags). You should provide just the text that goes inside those tags. For example, return "My Heading Text" NOT "<h1>My Heading Text</h1>".
 
 **Response Format:**
-You MUST respond with ONLY valid JSON in this exact format (no markdown, no code blocks, no explanations):
+You MUST respond with ONLY valid JSON in this exact format (no markdown, no code blocks, no explanations). **INCLUDE ALL ${templateFields.length} SLOTS - DO NOT SKIP ANY:**
+
 {
   "${templateFields[0].slotId}": "extracted content for first field",
   "${templateFields[1].slotId}": "extracted content for second field",
+  "${templateFields[2].slotId}": "extracted content for third field",
   ...
+  "${templateFields[templateFields.length - 1].slotId}": "extracted content for last field"
 }
 
-Each value should be a string containing ONLY plain text content (no HTML tags). Remember: Headlines = ONE LINE, Paragraphs = FULL PARAGRAPHS, NO HTML TAGS.`;
+**CRITICAL: VERIFICATION CHECKLIST:**
+1. Count the keys in your JSON response - you must have exactly ${templateFields.length} keys
+2. Every slot ID from the list above must appear as a key in your JSON
+3. For list slots, provide multiple lines (one item per line)
+4. For content blocks, provide substantial content (multiple sentences)
+5. If a slot seems difficult, extract the most relevant content from the narrative - DO NOT skip it
+
+**REQUIRED SLOT IDs - YOU MUST INCLUDE ALL OF THESE IN YOUR JSON RESPONSE:**
+${templateFields.map((f, i) => {
+  const isList = f.slotType === 'list';
+  const isContentBlock = f.label.toLowerCase().includes('content block');
+  const marker = (isList || isContentBlock) ? ' ⚠️ REQUIRED' : '';
+  return `${i + 1}. "${f.slotId}" (${f.slotType}): ${f.label}${marker}`;
+}).join('\n')}
+
+**BEFORE SUBMITTING YOUR RESPONSE:**
+1. Verify your JSON has exactly ${templateFields.length} keys
+2. Check that every slot ID listed above appears in your JSON
+3. Pay special attention to list slots and content blocks - they are often missed but are REQUIRED
+4. If you're missing any slots, go back and add them - DO NOT submit incomplete responses
+
+Each value should be a string containing ONLY plain text content (no HTML tags). 
+- Headlines = ONE LINE
+- Paragraphs = FULL PARAGRAPHS  
+- Lists = ONE ITEM PER LINE (each line is a bullet point, use newlines to separate items)
+- Content Blocks = MULTIPLE SENTENCES OR PARAGRAPHS
+- NO HTML TAGS
+
+**FINAL REMINDER:** You must return JSON with exactly ${templateFields.length} keys. Missing slots will cause errors. If you're unsure about a slot, extract the most relevant content from the narrative rather than skipping it.`;
 
   return prompt;
 }

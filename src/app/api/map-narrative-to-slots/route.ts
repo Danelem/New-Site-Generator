@@ -164,16 +164,33 @@ export async function POST(request: NextRequest) {
       userConfig,
     });
 
+    // Check if we have any slots mapped (partial success is allowed)
+    const hasSlots = result.slots && Object.keys(result.slots).length > 0;
+    const hasSlotErrors = result.slotErrors && Object.keys(result.slotErrors).length > 0;
+    
     if (!result.success) {
       // Log the error details for debugging
-      console.error('❌ Mapping failed:', {
+      console.error('❌ Mapping failed or partial:', {
         success: result.success,
         error: result.error,
+        slotsCount: result.slots ? Object.keys(result.slots).length : 0,
+        slotErrorsCount: hasSlotErrors ? Object.keys(result.slotErrors).length : 0,
         slotErrors: result.slotErrors,
         templateFieldsCount: templateFields.length,
         templateId,
       });
       
+      // If we have some slots, allow partial success
+      if (hasSlots) {
+        console.log(`⚠️ Partial success: ${Object.keys(result.slots).length} slots mapped, ${hasSlotErrors ? Object.keys(result.slotErrors).length : 0} failed`);
+        return Response.json({
+          slots: result.slots,
+          slotErrors: result.slotErrors,
+          warning: result.error || 'Some slots failed to map, but others succeeded. You can proceed and fill failed slots manually.',
+        });
+      }
+      
+      // Complete failure - no slots mapped
       const errorDetails = result.error || 'Unknown error occurred during mapping';
       
       return Response.json(
@@ -187,6 +204,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Full success
     return Response.json({
       slots: result.slots,
       slotErrors: result.slotErrors,

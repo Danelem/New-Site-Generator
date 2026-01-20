@@ -467,6 +467,7 @@ export class ContentGenerator {
       let parsed: Record<string, string>;
       try {
         parsed = JSON.parse(jsonContent);
+        console.log(`📋 Parsed JSON with ${Object.keys(parsed).length} keys:`, Object.keys(parsed));
       } catch (parseError: any) {
         console.error('❌ Failed to parse mapping response:', parseError);
         console.error('Parse error details:', {
@@ -482,6 +483,27 @@ export class ContentGenerator {
           error: `Failed to parse AI response as JSON: ${parseError?.message || 'Invalid JSON format'}`,
         };
       }
+      
+      // Log expected vs actual slot IDs for debugging
+      const expectedSlotIds = validFields.map(f => f.slotId);
+      const actualSlotIds = Object.keys(parsed);
+      const missingSlots = expectedSlotIds.filter(id => !actualSlotIds.includes(id));
+      const extraSlots = actualSlotIds.filter(id => !expectedSlotIds.includes(id));
+      
+      if (missingSlots.length > 0) {
+        console.warn('⚠️ Missing slots in AI response:', missingSlots);
+        // Log details about missing slots
+        missingSlots.forEach(slotId => {
+          const field = validFields.find(f => f.slotId === slotId);
+          console.warn(`  - Missing: ${slotId} (${field?.slotType || 'unknown'}): ${field?.label || 'unknown'}`);
+        });
+      }
+      if (extraSlots.length > 0) {
+        console.warn('ℹ️ Extra slots in AI response (not in template):', extraSlots);
+      }
+      
+      // Log summary
+      console.log(`📊 Slot mapping summary: ${actualSlotIds.length} returned, ${expectedSlotIds.length} expected, ${missingSlots.length} missing`);
 
       // Validate that all required slots are present
       const slotErrors: Record<string, string> = {};
@@ -532,10 +554,19 @@ export class ContentGenerator {
       }
 
       if (Object.keys(slotErrors).length > 0) {
-        console.warn('⚠️ Some slots missing from response:', Object.keys(slotErrors));
+        console.warn('⚠️ Some slots failed to map:');
+        Object.entries(slotErrors).forEach(([slotId, errorMsg]) => {
+          const field = validFields.find(f => f.slotId === slotId);
+          console.warn(`  - ${slotId} (${field?.label || 'unknown'}): ${errorMsg}`);
+        });
+        console.warn('Failed slot IDs:', Object.keys(slotErrors));
+        console.warn('AI response keys:', Object.keys(parsed));
       }
 
       console.log(`✅ Successfully mapped ${Object.keys(slots).length} slots`);
+      if (Object.keys(slotErrors).length > 0) {
+        console.log(`⚠️ ${Object.keys(slotErrors).length} slots failed`);
+      }
 
       return {
         slots,
