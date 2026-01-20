@@ -174,7 +174,7 @@ export async function POST(request: NextRequest) {
         success: result.success,
         error: result.error,
         slotsCount: result.slots ? Object.keys(result.slots).length : 0,
-        slotErrorsCount: hasSlotErrors ? Object.keys(result.slotErrors).length : 0,
+        slotErrorsCount: hasSlotErrors && result.slotErrors ? Object.keys(result.slotErrors).length : 0,
         slotErrors: result.slotErrors,
         templateFieldsCount: templateFields.length,
         templateId,
@@ -182,7 +182,7 @@ export async function POST(request: NextRequest) {
       
       // If we have some slots, allow partial success
       if (hasSlots) {
-        console.log(`⚠️ Partial success: ${Object.keys(result.slots).length} slots mapped, ${hasSlotErrors ? Object.keys(result.slotErrors).length : 0} failed`);
+        console.log(`⚠️ Partial success: ${Object.keys(result.slots).length} slots mapped, ${hasSlotErrors && result.slotErrors ? Object.keys(result.slotErrors).length : 0} failed`);
         return Response.json({
           slots: result.slots,
           slotErrors: result.slotErrors,
