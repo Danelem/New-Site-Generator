@@ -35,7 +35,7 @@ import { GoogleGenerativeAI } from './googleAI';
  * Allows easy swapping of AI providers (Google Gemini, OpenAI, etc.)
  */
 export interface AIModelProvider {
-  generateText(prompt: string, config: AIModelConfig): Promise<string>;
+  generateText(prompt: string, config: AIModelConfig, operationId?: string): Promise<string>;
 }
 
 /**
@@ -49,21 +49,16 @@ function sleep(ms: number): Promise<void> {
  * Google Gemini implementation of AIModelProvider
  */
 export class GoogleGeminiProvider implements AIModelProvider {
-  async generateText(prompt: string, config: AIModelConfig): Promise<string> {
+  async generateText(prompt: string, config: AIModelConfig, operationId: string = 'default'): Promise<string> {
     // Wait for rate limiter before making request (minimal delay in serverless)
     await rateLimiter.waitIfNeeded();
     
     const genAI = new GoogleGenerativeAI(config.apiKey);
     
-    // Try multiple model names with fallback (prioritizing faster models for serverless)
-    // Reduced model list and retries to avoid timeouts in Vercel
+    // Use only gemini-2.0-flash model
     const modelNames = [
-      config.modelName,
-      'gemini-1.5-flash', // Fastest, good for most use cases
-      'gemini-1.5-flash-latest',
-      'gemini-2.0-flash',
-      'gemini-1.5-pro-latest', // More capable but slower
-      'gemini-1.5-pro',
+      config.modelName || 'gemini-2.0-flash',
+      'gemini-2.0-flash', // Only fallback to gemini-2.0-flash
     ];
 
     let lastError: any = null;
@@ -113,14 +108,54 @@ export class GoogleGeminiProvider implements AIModelProvider {
           console.log(`⚠️ Model ${modelName} not available, trying next...`);
           continue; // Try next model
         } 
-        // If it's a rate limit error, try next model (don't retry to avoid timeout)
+        // If it's a rate limit error, wait and retry with exponential backoff
         else if (error.message?.includes('429') || 
                  error.message?.includes('Too Many Requests') ||
                  error.message?.includes('rate limit') ||
+                 error.message?.includes('quota') ||
                  error.status === 429 ||
-                 error.code === 429) {
-          console.log(`⚠️ Rate limit hit for ${modelName}, trying next model...`);
-          continue; // Try next model instead of retrying
+                 error.code === 429 ||
+                 error.statusCode === 429) {
+          console.log(`⚠️ Rate limit hit for ${modelName}, waiting before retry...`);
+          
+          // Calculate retry delay with exponential backoff
+          const retryDelay = await rateLimiter.handleRateLimitError(error, `model-${modelName}`);
+          
+          // Retry this model once after delay
+          try {
+            console.log(`🔄 Retrying ${modelName} after rate limit delay...`);
+            const model = genAI.getGenerativeModel({ 
+              model: modelName,
+              generationConfig: {
+                temperature: config.temperature ?? 0.7,
+                maxOutputTokens: config.maxTokens,
+              },
+            });
+            
+            const generatePromise = (async () => {
+              const result = await model.generateContent(prompt);
+              const response = await result.response;
+              return response.text();
+            })();
+            
+            const timeoutPromise = new Promise<string>((_, reject) => {
+              setTimeout(() => reject(new Error(`Request timeout after ${timeoutMs / 1000}s`)), timeoutMs);
+            });
+            
+            const text = await Promise.race([generatePromise, timeoutPromise]);
+            console.log(`✅ Successfully generated content using model: ${modelName} (after rate limit retry)`);
+            return text;
+          } catch (retryError: any) {
+            // If retry also fails with rate limit, try next model
+            if (retryError.message?.includes('429') || retryError.status === 429) {
+              console.log(`⚠️ Rate limit still active for ${modelName}, trying next model...`);
+              lastError = retryError;
+              continue;
+            }
+            // If retry fails for other reason, try next model
+            lastError = retryError;
+            continue;
+          }
         } 
         // For other errors, try next model
         else {
@@ -176,10 +211,10 @@ export class ContentGenerator {
       throw new Error('GOOGLE_AI_API_KEY environment variable is not set');
     }
 
-    // Default model configuration (using Gemini 3)
+    // Default model configuration (using Gemini 2.0 Flash)
     // Optimized for faster generation in serverless environments
     this.modelConfig = {
-      modelName: 'gemini-1.5-flash', // Use faster model by default for better timeout handling
+      modelName: 'gemini-2.0-flash', // Use gemini-2.0-flash as default
       apiKey,
       temperature: 0.7,
       maxTokens: 3000, // Reduced from 4000 to speed up generation and avoid timeouts
@@ -211,7 +246,7 @@ export class ContentGenerator {
       console.log(prompt.substring(0, 500) + '...');
       console.log('='.repeat(80));
 
-      const coreNarrative = await this.aiProvider.generateText(prompt, this.modelConfig);
+      const coreNarrative = await this.aiProvider.generateText(prompt, this.modelConfig, 'generate-core-narrative');
       
       console.log('✅ Core Narrative Generated');
       console.log(`Length: ${coreNarrative.length} characters`);
@@ -244,7 +279,7 @@ export class ContentGenerator {
       console.log(`📤 Slot Prompt for "${request.slotId}":`);
       console.log(prompt.substring(0, 300) + '...');
 
-      const content = await this.aiProvider.generateText(prompt, this.modelConfig);
+      const content = await this.aiProvider.generateText(prompt, this.modelConfig, `generate-slot-${request.slotId}`);
       
       console.log(`✅ Slot "${request.slotId}" Generated`);
       console.log(`Content: ${content.substring(0, 100)}...`);
@@ -282,8 +317,10 @@ export class ContentGenerator {
     const results: Record<string, string> = {};
     const errors: Record<string, string> = {};
 
-    // Generate slots sequentially to avoid rate limits
-    // Add delay between requests to prevent hitting rate limits
+      // Generate slots sequentially to avoid rate limits
+      // Add delay between requests to prevent hitting rate limits
+      // Use operation-specific retry tracking for better throttling
+      const operationId = `map-narrative-${Date.now()}`;
     for (let i = 0; i < slots.length; i++) {
       const slot = slots[i];
       const request: SlotGenerationRequest = {
@@ -303,13 +340,15 @@ export class ContentGenerator {
         errors[slot.slotId] = response.error || 'Unknown error';
       }
       
-      // Rate limiter already handles delays in generateText, but add extra safety delay
-      // for batch operations to be extra safe
+      // Reset retry attempts on successful generation
+      rateLimiter.resetRetryAttempts(operationId);
+      
+      // Add delay between slot generations to avoid hitting rate limits
       if (i < slots.length - 1) {
         // Wait for rate limiter to ensure we don't exceed limits
         await rateLimiter.waitIfNeeded();
-        // Additional small delay for batch operations
-        await sleep(200);
+        // Additional small delay for batch operations (500ms total with rate limiter)
+        await sleep(300);
       }
     }
 
@@ -435,7 +474,7 @@ export class ContentGenerator {
       console.log(prompt.substring(0, 500) + '...');
       console.log('='.repeat(80));
 
-      const response = await this.aiProvider.generateText(prompt, this.modelConfig);
+      const response = await this.aiProvider.generateText(prompt, this.modelConfig, operationId);
       
       console.log('✅ Mapping Response Received');
       console.log(`Response length: ${response.length} characters`);
@@ -626,11 +665,11 @@ export class ContentGenerator {
       const errorStr = errorMessage || String(error) || 'Unknown error';
       
       if (errorStr.includes('429') || errorStr.includes('rate limit') || errorStr.includes('Too Many Requests') || errorDetails.status === 429 || errorDetails.code === 429) {
-        finalErrorMessage = 'API rate limit exceeded. Please wait a few minutes and try again.';
+        finalErrorMessage = 'API rate limit exceeded. The system will automatically retry with exponential backoff. Please wait a moment and try again if the issue persists.';
       } else if (errorStr.includes('timeout') || errorStr.includes('ETIMEDOUT') || errorStr.includes('Timeout')) {
         finalErrorMessage = 'Request timed out. The narrative might be too long. Please try again.';
       } else if (errorStr.includes('quota') || errorStr.includes('quota exceeded')) {
-        finalErrorMessage = 'API quota exceeded. Please check your Google AI API quota.';
+        finalErrorMessage = 'API quota exceeded. Please check your Google AI API quota and billing settings.';
       } else if (errorStr.includes('401') || errorStr.includes('403') || errorStr.includes('authentication') || errorStr.includes('API key') || errorStr.includes('permission') || errorDetails.status === 401 || errorDetails.status === 403) {
         finalErrorMessage = 'API authentication failed. Please check your GOOGLE_AI_API_KEY environment variable is set correctly.';
       } else if (errorStr.includes('404') || errorStr.includes('not found') || errorDetails.status === 404) {
@@ -679,7 +718,7 @@ export class ContentGenerator {
       console.log(`📤 Regeneration Prompt for "${request.slotId}":`);
       console.log(prompt.substring(0, 300) + '...');
 
-      let content = await this.aiProvider.generateText(prompt, this.modelConfig);
+      let content = await this.aiProvider.generateText(prompt, this.modelConfig, `regenerate-slot-${request.slotId}`);
       
       // Strip HTML tags if AI included them (shouldn't happen, but just in case)
       content = content.replace(/<[^>]*>/g, '');

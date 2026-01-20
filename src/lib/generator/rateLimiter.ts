@@ -67,13 +67,20 @@ class RateLimiter {
     this.lastRequestTime = Date.now();
   }
 
+  private retryAttempts: Map<string, number> = new Map(); // Track retry attempts per operation
+
   /**
    * Handle rate limit error and calculate retry delay
    */
-  async handleRateLimitError(error: any): Promise<number> {
-    // Check for Retry-After header in error response
-    let retryAfter = this.config.retryAfterSeconds || 60; // Default: 60 seconds
+  async handleRateLimitError(error: any, operationId: string = 'default'): Promise<number> {
+    // Get current retry attempt count
+    const attemptCount = this.retryAttempts.get(operationId) || 0;
+    this.retryAttempts.set(operationId, attemptCount + 1);
     
+    // Check for Retry-After header in error response
+    let retryAfter = this.config.retryAfterSeconds || 30; // Default: 30 seconds
+    
+    // Try to extract Retry-After from various error formats
     if (error.response?.headers?.get) {
       const retryAfterHeader = error.response.headers.get('Retry-After');
       if (retryAfterHeader) {
@@ -81,22 +88,36 @@ class RateLimiter {
       }
     } else if (error.response?.headers?.['retry-after']) {
       retryAfter = parseInt(error.response.headers['retry-after'], 10);
+    } else if (error.headers?.['retry-after']) {
+      retryAfter = parseInt(error.headers['retry-after'], 10);
+    } else if (error.retryAfter) {
+      retryAfter = parseInt(String(error.retryAfter), 10);
     }
 
-    // Exponential backoff: start with 30 seconds, double each time
-    const baseDelay = 30000; // 30 seconds
-    const maxDelay = 300000; // 5 minutes max
+    // Exponential backoff: start with 15 seconds, increase with each attempt
+    // Formula: baseDelay * (2 ^ attemptCount) with jitter
+    const baseDelay = 15000; // 15 seconds base
+    const exponentialDelay = baseDelay * Math.pow(2, Math.min(attemptCount, 4)); // Cap at 2^4 = 16x
+    const jitter = Math.random() * 5000; // Add 0-5s random jitter to avoid thundering herd
+    const maxDelay = 120000; // 2 minutes max (to avoid Vercel timeout)
     
-    // Use the larger of Retry-After or exponential backoff
+    // Use the larger of Retry-After or exponential backoff, but cap at maxDelay
     const delay = Math.min(
-      Math.max(retryAfter * 1000, baseDelay),
+      Math.max(retryAfter * 1000, exponentialDelay) + jitter,
       maxDelay
     );
 
-    console.log(`⏳ Rate limit hit. Waiting ${(delay / 1000).toFixed(0)}s before retry...`);
+    console.log(`⏳ Rate limit hit (attempt ${attemptCount + 1}). Waiting ${(delay / 1000).toFixed(1)}s before retry...`);
     await this.sleep(delay);
     
     return delay;
+  }
+
+  /**
+   * Reset retry attempts for an operation
+   */
+  resetRetryAttempts(operationId: string = 'default'): void {
+    this.retryAttempts.delete(operationId);
   }
 
   /**

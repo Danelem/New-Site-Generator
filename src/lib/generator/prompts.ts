@@ -195,8 +195,17 @@ Respond with ONLY the generated content. No explanations, no markdown formatting
 export function buildMapNarrativeToSlotsPrompt(request: MapNarrativeToSlotsRequest): string {
   const { coreNarrative, templateFields, userConfig } = request;
 
+  // Validate and filter out any undefined/null fields
+  const validFields = templateFields.filter(
+    (f): f is NonNullable<typeof f> => f != null && f.slotId != null
+  );
+
+  if (validFields.length === 0) {
+    throw new Error('No valid template fields provided for narrative mapping');
+  }
+
   // Build enhanced field descriptions with structure context
-  const enhancedFieldDescriptions = templateFields.map((field, index) => {
+  const enhancedFieldDescriptions = validFields.map((field, index) => {
     let desc = `- ${field.slotId} (${field.slotType}): ${field.label}`;
     if (field.description) {
       desc += ` - ${field.description}`;
@@ -250,7 +259,7 @@ ${coreNarrative}
 **Template Fields to Fill (with structure requirements):**
 ${enhancedFieldDescriptions}
 
-**IMPORTANT: You must provide content for ALL ${templateFields.length} slots listed above.**
+**IMPORTANT: You must provide content for ALL ${validFields.length} slots listed above.**
 - Text slots (headings, paragraphs) = extract text content
 - List slots = extract 3-8 key points, one per line
 - Content blocks = extract multiple sentences
@@ -264,7 +273,7 @@ ${userConfig.targetStates && userConfig.targetStates.length > 0
   : ''}
 
 **CRITICAL REQUIREMENTS:**
-1. **YOU MUST INCLUDE ALL ${templateFields.length} SLOTS IN YOUR RESPONSE.** Every slot ID listed above must have a value in your JSON response. Do NOT skip any slots, especially lists or content blocks.
+1. **YOU MUST INCLUDE ALL ${validFields.length} SLOTS IN YOUR RESPONSE.** Every slot ID listed above must have a value in your JSON response. Do NOT skip any slots, especially lists or content blocks.
 2. Extract content from the Core Narrative for each field. Do NOT create new content that isn't in the narrative.
 3. PRESERVE STRUCTURE: If a slot is labeled as "Headline" or "H1", it should be ONE LINE only. If it's "Paragraph" or "Body", it should be a full paragraph.
 4. For headings (H1, H2, H3, etc.), extract or create a SINGLE LINE that captures the essence. Do NOT include paragraph text in headings.
@@ -286,25 +295,21 @@ ${userConfig.targetStates && userConfig.targetStates.length > 0
 11. **CRITICAL: DO NOT include HTML tags in your response.** Return ONLY plain text content. The template already has the HTML structure (H1, H2, P, UL, OL tags). You should provide just the text that goes inside those tags. For example, return "My Heading Text" NOT "<h1>My Heading Text</h1>".
 
 **Response Format:**
-You MUST respond with ONLY valid JSON in this exact format (no markdown, no code blocks, no explanations). **INCLUDE ALL ${templateFields.length} SLOTS - DO NOT SKIP ANY:**
+You MUST respond with ONLY valid JSON in this exact format (no markdown, no code blocks, no explanations). **INCLUDE ALL ${validFields.length} SLOTS - DO NOT SKIP ANY:**
 
 {
-  "${templateFields[0].slotId}": "extracted content for first field",
-  "${templateFields[1].slotId}": "extracted content for second field",
-  "${templateFields[2].slotId}": "extracted content for third field",
-  ...
-  "${templateFields[templateFields.length - 1].slotId}": "extracted content for last field"
+${validFields.length > 0 ? `  "${validFields[0].slotId}": "extracted content for first field"` : ''}${validFields.length > 1 ? `,\n  "${validFields[1].slotId}": "extracted content for second field"` : ''}${validFields.length > 2 ? `,\n  "${validFields[2].slotId}": "extracted content for third field"` : ''}${validFields.length > 3 ? `,\n  ...` : ''}${validFields.length > 1 ? `,\n  "${validFields[validFields.length - 1].slotId}": "extracted content for last field"` : ''}
 }
 
 **CRITICAL: VERIFICATION CHECKLIST:**
-1. Count the keys in your JSON response - you must have exactly ${templateFields.length} keys
+1. Count the keys in your JSON response - you must have exactly ${validFields.length} keys
 2. Every slot ID from the list above must appear as a key in your JSON
 3. For list slots, provide multiple lines (one item per line)
 4. For content blocks, provide substantial content (multiple sentences)
 5. If a slot seems difficult, extract the most relevant content from the narrative - DO NOT skip it
 
 **REQUIRED SLOT IDs - YOU MUST INCLUDE ALL OF THESE IN YOUR JSON RESPONSE:**
-${templateFields.map((f, i) => {
+${validFields.map((f, i) => {
   const isList = f.slotType === 'list';
   const isContentBlock = f.label.toLowerCase().includes('content block');
   const marker = (isList || isContentBlock) ? ' ⚠️ REQUIRED' : '';
@@ -312,7 +317,7 @@ ${templateFields.map((f, i) => {
 }).join('\n')}
 
 **BEFORE SUBMITTING YOUR RESPONSE:**
-1. Verify your JSON has exactly ${templateFields.length} keys
+1. Verify your JSON has exactly ${validFields.length} keys
 2. Check that every slot ID listed above appears in your JSON
 3. Pay special attention to list slots and content blocks - they are often missed but are REQUIRED
 4. If you're missing any slots, go back and add them - DO NOT submit incomplete responses
@@ -324,7 +329,7 @@ Each value should be a string containing ONLY plain text content (no HTML tags).
 - Content Blocks = MULTIPLE SENTENCES OR PARAGRAPHS
 - NO HTML TAGS
 
-**FINAL REMINDER:** You must return JSON with exactly ${templateFields.length} keys. Missing slots will cause errors. If you're unsure about a slot, extract the most relevant content from the narrative rather than skipping it.`;
+**FINAL REMINDER:** You must return JSON with exactly ${validFields.length} keys. Missing slots will cause errors. If you're unsure about a slot, extract the most relevant content from the narrative rather than skipping it.`;
 
   return prompt;
 }
