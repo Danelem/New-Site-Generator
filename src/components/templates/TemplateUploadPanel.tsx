@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { addUploadedTemplate } from "@/lib/templates/uploadedStorage";
-import type { UploadedTemplate, TemplateSlot } from "@/lib/templates/uploadedTypes";
+import type { UploadedTemplate } from "@/lib/templates/uploadedTypes";
 import { detectSlots } from "@/lib/templates/slotDetector";
 
 interface TemplateUploadPanelProps {
@@ -12,116 +12,127 @@ interface TemplateUploadPanelProps {
 export function TemplateUploadPanel({ onUploadSuccess }: TemplateUploadPanelProps) {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [url, setUrl] = useState("");
-  const [isFetching, setIsFetching] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  async function handleUrlSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!url.trim()) {
-      setError("Please enter a website URL");
-      return;
-    }
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-    setStatus("Fetching website...");
+    // Reset state
     setError(null);
-    setIsFetching(true);
+    setStatus("Reading file...");
+    setIsProcessing(true);
 
     try {
-      const response = await fetch("/api/fetch-template", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ url: url.trim() }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to fetch website");
-      }
-
-      const data = await response.json();
-      const { htmlBody, css } = data;
-
-      if (!htmlBody) {
-        throw new Error("No body content found in the website");
-      }
-
-      // Automatically detect slots using the shared utility
-      // This ensures slots are always detected and saved with the template
+      // 1. Read file contents client-side
+      const text = await readFileAsText(file);
+      
+      // 2. Detect slots locally (no API call needed!)
       setStatus("Detecting content slots...");
-      const { htmlBody: updatedHtmlBody, slots: templateSlots } = detectSlots(htmlBody);
+      const { htmlBody, slots: templateSlots } = detectSlots(text);
 
+      if (templateSlots.length === 0) {
+        setStatus(null);
+        setError("No content slots detected. Ensure your HTML has headings (h1-h6), paragraphs (p), or lists.");
+        setIsProcessing(false);
+        return;
+      }
+
+      // 3. Create template object
       const now = new Date().toISOString();
-      const urlObj = new URL(url.trim());
-      const baseName = urlObj.hostname.replace(/^www\./, "") || "website-template";
-      const id = (`uploaded-${baseName}`).toLowerCase().replace(/[^a-z0-9]+/g, "-");
-      const name = baseName.charAt(0).toUpperCase() + baseName.slice(1);
+      // Generate short, safe ID using timestamp (ensures URL-safe IDs for edit links)
+      const id = `uploaded-${Date.now()}`;
+      // Keep the original filename (without extension) as the display name
+      const name = file.name.replace(/\.[^/.]+$/, "") || "Uploaded Template";
 
       const uploaded: UploadedTemplate = {
         id: id as any,
         name,
-        description: `Template extracted from ${url.trim()}`,
-        htmlBody: updatedHtmlBody,
-        css: css || undefined,
+        description: `Uploaded from file: ${file.name}`,
+        htmlBody, // The cleaned HTML
+        css: "", // You can add a CSS input field later if needed
         slots: templateSlots,
         createdAt: now,
       };
 
+      // 4. Save to local storage
       addUploadedTemplate(uploaded);
-      setStatus(`Template "${name}" created with ${templateSlots.length} slot(s).`);
-      setUrl(""); // Clear input
+      
+      setStatus(`Success! Template "${name}" added with ${templateSlots.length} editable slots.`);
       if (onUploadSuccess) {
         onUploadSuccess();
       }
-      window.dispatchEvent(new CustomEvent("template-uploaded"));
+      
+      // Reset input
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => setStatus(null), 5000);
+
     } catch (err: any) {
       console.error(err);
-      setError(err?.message || "Failed to fetch and process website.");
+      setError("Failed to process file. Please ensure it is a valid HTML file.");
       setStatus(null);
     } finally {
-      setIsFetching(false);
+      setIsProcessing(false);
     }
-  }
+  };
+
+  // Helper to read file as text
+  const readFileAsText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onerror = (e) => reject(e);
+      reader.readAsText(file);
+    });
+  };
 
   return (
-    <div style={{ borderTop: "1px solid #ddd", marginTop: "16px", paddingTop: "12px" }}>
-      <h3 className="text-lg font-semibold text-gray-900 mb-3">Create Template from Website</h3>
+    <div className="mt-4 pt-4 border-t border-gray-200">
+      <h3 className="text-lg font-semibold text-gray-900 mb-3">Upload Template File</h3>
       <p className="text-sm text-gray-600 mb-4">
-        Enter a website URL to extract its HTML and CSS. The system will automatically remove scripts, ads, and tracking code, keeping only the design structure.
+        Upload a clean HTML file (e.g., saved from a website or built manually). 
+        The system will automatically detect editable text sections.
       </p>
-      <form onSubmit={handleUrlSubmit} className="space-y-3">
-        <div className="flex gap-2">
-          <input
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://example.com"
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            disabled={isFetching}
-          />
-          <button
-            type="submit"
-            disabled={isFetching || !url.trim()}
-            className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
-          >
-            {isFetching ? "Fetching..." : "Extract Template"}
-          </button>
+      
+      <div className="space-y-4">
+        <div className="flex items-center gap-4">
+          <label className="flex-1">
+            <span className="sr-only">Choose file</span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".html,.htm"
+              onChange={handleFileChange}
+              disabled={isProcessing}
+              className="block w-full text-sm text-slate-500
+                file:mr-4 file:py-2 file:px-4
+                file:rounded-full file:border-0
+                file:text-sm file:font-semibold
+                file:bg-blue-50 file:text-blue-700
+                hover:file:bg-blue-100
+                cursor-pointer"
+            />
+          </label>
         </div>
+
         {status && (
-          <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded-md text-sm text-green-800">
+          <div className="p-3 bg-green-50 border border-green-200 rounded-md text-sm text-green-800">
             {status}
           </div>
         )}
         {error && (
-          <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-800">
+          <div className="p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-800">
             {error}
           </div>
         )}
-      </form>
-      <p className="mt-3 text-xs text-gray-500">
-        Note: The website must be publicly accessible. The system will automatically detect all headings, paragraphs, and lists and make them editable - no technical knowledge required!
-      </p>
+      </div>
+      
+      <div className="mt-4 p-3 bg-gray-50 rounded text-xs text-gray-500">
+        <strong>Tip:</strong> For best results, use &quot;Save Page As &gt; Webpage, Single File&quot; or &quot;Webpage, HTML Only&quot; in your browser.
+      </div>
     </div>
   );
 }

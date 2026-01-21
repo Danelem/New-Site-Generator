@@ -24,28 +24,37 @@ export function getTemplateFields(template: TemplateConfig): TemplateFieldDefini
     return [];
   }
   
-  // Filter out any undefined/null slots, image slots, and url slots (they don't need narrative content)
-  // Only include slots that need text content (text, list, rich-text)
+  // Filter out any undefined/null slots and image slots (they don't need narrative content)
+  // Only include slots that need text content (headline, subheadline, paragraph, list, cta)
   return template.slots
     .filter((slot): slot is NonNullable<typeof slot> => 
       slot != null && 
       slot.id != null && 
-      slot.type !== 'image' && 
-      slot.type !== 'url' // Images and URLs don't need narrative mapping
+      slot.type !== 'image' // Images don't need narrative mapping
     )
     .map(slot => {
-      const slotType = mapSlotType(slot.type || 'text');
+      const slotType = mapSlotType(slot.type || 'paragraph');
     
-    // Assign default maxLength based on slot type
+    // Assign default maxLength and instructions based on slot type
     let maxLength: number | undefined;
+    let defaultInstructions: string | undefined;
+    
     if (slotType === 'headline') {
-      maxLength = 100; // Headlines: 100 chars
-    } else if (slotType === 'list') {
-      maxLength = 800; // Lists: 800 chars
+      maxLength = 80; // Headlines: 80 chars max
+      defaultInstructions = "Write a punchy, attention-grabbing hook. No periods at the end.";
+    } else if (slotType === 'subheadline') {
+      maxLength = 100; // Subheadlines: 100 chars max
+      defaultInstructions = "Write a short, descriptive subhead. 3-8 words.";
+    } else if (slotType === 'cta') {
+      maxLength = 30; // CTAs: 30 chars max
+      defaultInstructions = "Write a button label (e.g., 'Check Price', 'Read Review').";
     } else if (slotType === 'paragraph') {
-      maxLength = 1000; // Paragraphs: 1000 chars
+      maxLength = 800; // Paragraphs: 800 chars max
+      defaultInstructions = "Write a full paragraph.";
+    } else if (slotType === 'list') {
+      maxLength = 800; // Lists: 800 chars max
+      // Lists don't need default instructions, they have their own format
     }
-    // No limit for other types
     
     // Special handling for Creatine Report template slots (for backward compatibility)
     // These provide more specific instructions
@@ -113,23 +122,32 @@ export function getTemplateFields(template: TemplateConfig): TemplateFieldDefini
       slotType,
       description: special?.description || `Content slot: ${slot.label}`,
       maxLength: special?.maxLength || maxLength,
-      instructions: special?.instructions,
+      instructions: special?.instructions || defaultInstructions,
     };
   });
 }
 
 /**
  * Map template slot type to our SlotType for AI generation.
+ * Only maps exact types - no generic fallback to 'paragraph'.
  */
 function mapSlotType(slotType: string): TemplateFieldDefinition['slotType'] {
   const typeMap: Record<string, TemplateFieldDefinition['slotType']> = {
+    // New granular types - exact mapping
+    headline: 'headline',
+    subheadline: 'subheadline',
+    paragraph: 'paragraph',
+    list: 'list',
+    cta: 'cta',
+    image: 'paragraph', // Images are filtered out, but map for safety if needed
+    // Legacy types (for backward compatibility)
     text: 'paragraph',
     'rich-text': 'paragraph',
-    list: 'list',
-    image: 'paragraph', // Images don't need text generation
-    url: 'paragraph', // URLs don't need text generation
+    url: 'cta', // Legacy 'url' maps to 'cta' for generation
   };
   
+  // Only return mapped type if it exists, otherwise default to paragraph
+  // This ensures we always have a valid type
   return typeMap[slotType] || 'paragraph';
 }
 

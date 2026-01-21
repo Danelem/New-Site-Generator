@@ -3,7 +3,7 @@
  * This ensures all templates are treated the same way.
  */
 
-export type SlotType = "text" | "rich-text" | "list" | "image" | "url";
+export type SlotType = "headline" | "subheadline" | "paragraph" | "list" | "image" | "cta";
 
 export type TemplateSlot = {
   id: string;           // e.g. "page_title", "pageHeadline"

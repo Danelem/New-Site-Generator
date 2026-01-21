@@ -35,3 +35,10 @@ export function addUploadedTemplate(t: UploadedTemplate): UploadedTemplate[] {
   saveUploadedTemplates(next);
   return next;
 }
+
+export function deleteUploadedTemplate(id: string): UploadedTemplate[] {
+  const existing = loadUploadedTemplates();
+  const filtered = existing.filter((t) => t.id !== id);
+  saveUploadedTemplates(filtered);
+  return filtered;
+}

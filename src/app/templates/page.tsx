@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from 'next/link';
 import { TEMPLATES } from '@/lib/templates/registry';
-import { loadUploadedTemplates } from '@/lib/templates/uploadedStorage';
+import { loadUploadedTemplates, deleteUploadedTemplate } from '@/lib/templates/uploadedStorage';
 import type { UploadedTemplate } from '@/lib/templates/uploadedTypes';
 import { TemplateUploadPanel } from '@/components/templates/TemplateUploadPanel';
 
@@ -28,6 +28,13 @@ export default function TemplatesPage() {
     window.addEventListener('template-uploaded', handleTemplateUploaded);
     return () => window.removeEventListener('template-uploaded', handleTemplateUploaded);
   }, []);
+
+  const handleDelete = (id: string) => {
+    if (confirm("Are you sure you want to delete this template?")) {
+      const updated = deleteUploadedTemplate(id);
+      setUploaded(updated); // Update the local state to remove the row instantly
+    }
+  };
 
   return (
     <main className="min-h-screen p-8 sm:p-20 bg-gray-50">
@@ -159,6 +166,12 @@ ${htmlContent}
                             className="text-green-600 hover:text-green-800 font-medium text-sm"
                           >
                             Download
+                          </button>
+                          <button 
+                            onClick={() => handleDelete(template.id)}
+                            className="text-red-600 hover:text-red-900 font-medium text-sm"
+                          >
+                            Delete
                           </button>
                         </div>
                       </td>

@@ -1,7 +1,6 @@
 /**
- * Slot Detection Utility
- * Automatically detects editable content slots in HTML templates
- * by finding headings, paragraphs, lists, images, and links.
+ * Slot Detection Utility - FIXED & ROBUST
+ * Automatically detects editable content slots and assigns granular types.
  */
 
 import type { TemplateSlot, SlotType } from './types';
@@ -13,29 +12,24 @@ export interface DetectSlotsResult {
 
 /**
  * Detects editable content slots in HTML and adds data-slot attributes.
- * Works in both browser and Node.js environments.
  */
 export function detectSlots(htmlBody: string): DetectSlotsResult {
   if (!htmlBody || typeof htmlBody !== 'string') {
     return { htmlBody: htmlBody || '', slots: [] };
   }
 
-  // Use DOMParser if available (browser or Node.js with jsdom)
+  // Use DOMParser if available (browser)
   let doc: Document;
   let serializer: XMLSerializer | null = null;
 
   try {
-    // Try browser/Node.js DOMParser
     const parser = new DOMParser();
     doc = parser.parseFromString(htmlBody, 'text/html');
-    
-    // Check if XMLSerializer is available (for browser)
     if (typeof XMLSerializer !== 'undefined') {
       serializer = new XMLSerializer();
     }
   } catch (error) {
-    // Fallback: use regex-based approach if DOMParser fails
-    console.warn('DOMParser not available, using regex fallback:', error);
+    // Fallback to regex if DOMParser fails (Node.js/Server)
     return detectSlotsRegex(htmlBody);
   }
 
@@ -48,135 +42,107 @@ export function detectSlots(htmlBody: string): DetectSlotsResult {
   let slotCounter = 0;
 
   /**
-   * Generate a unique slot ID from element content and type
+   * Helper: Check if element is inside an ignored structural element
+   * Returns true if the element or any parent matches ignored tags/classes/IDs
    */
-  function generateSlotId(element: Element, type: SlotType): string {
-    // Try to get meaningful text from the element
-    let text = '';
+  function isInsideIgnoredElement(element: Element): boolean {
+    const ignoredTags = ['nav', 'footer', 'header', 'script', 'style', 'svg'];
+    const ignoredPatterns = ['menu', 'nav', 'footer', 'popup', 'hidden', 'sidebar', 'cookie'];
     
-    if (element.textContent) {
-      text = element.textContent.trim().substring(0, 50);
-    } else if (element.getAttribute('alt')) {
-      text = element.getAttribute('alt') || '';
-    } else if (element.getAttribute('title')) {
-      text = element.getAttribute('title') || '';
-    } else if (element.getAttribute('href')) {
-      text = element.getAttribute('href') || '';
+    let current: Element | null = element;
+    
+    while (current && current !== body) {
+      // Check tag name
+      const tagName = current.tagName.toLowerCase();
+      if (ignoredTags.includes(tagName)) {
+        return true;
+      }
+      
+      // Check classes and IDs
+      const classAttr = current.getAttribute('class') || '';
+      const idAttr = current.getAttribute('id') || '';
+      const combined = `${classAttr} ${idAttr}`.toLowerCase();
+      
+      if (ignoredPatterns.some(pattern => combined.includes(pattern))) {
+        return true;
+      }
+      
+      // Move up to parent
+      current = current.parentElement;
     }
-
-    // Convert text to a valid ID
-    let baseId = text
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '')
-      .substring(0, 40);
-
-    // If no meaningful text, use element type and position
-    if (!baseId) {
-      const tagName = element.tagName.toLowerCase();
-      baseId = `${tagName}_${slotCounter}`;
-    }
-
-    // Ensure uniqueness
-    let slotId = baseId;
-    let counter = 1;
-    while (slots.some(s => s.id === slotId)) {
-      slotId = `${baseId}_${counter}`;
-      counter++;
-    }
-
-    return slotId;
+    
+    return false;
   }
 
   /**
-   * Generate a human-readable label from slot ID
+   * Helper: Determine the specific SlotType based on the HTML tag
    */
-  function generateLabel(slotId: string, type: SlotType): string {
-    return slotId
-      .replace(/_/g, ' ')
-      .replace(/\b\w/g, (c) => c.toUpperCase());
+  function getSlotType(tagName: string, element: Element): SlotType | null {
+    const tag = tagName.toLowerCase();
+    
+    if (tag === 'h1' || tag === 'h2') return 'headline';
+    if (['h3', 'h4', 'h5', 'h6'].includes(tag)) return 'subheadline';
+    if (tag === 'p') return 'paragraph';
+    if (tag === 'ul' || tag === 'ol') return 'list';
+    if (tag === 'img') return 'image';
+    
+    // For links, only treat them as slots if they look like buttons/CTAs or nav items
+    // (ignoring empty links or anchors)
+    if (tag === 'a') {
+      const href = element.getAttribute('href');
+      const text = element.textContent?.trim();
+      if (href && text && text.length > 0) {
+        return 'cta';
+      }
+    }
+    
+    return null;
   }
 
   /**
-   * Process an element and add data-slot if it's a content element
+   * Process all relevant elements in the DOM
    */
-  function processElement(element: Element, type: SlotType): boolean {
-    // Skip if already has a data-slot attribute
-    if (element.hasAttribute('data-slot')) {
-      return false;
-    }
+  const allElements = body.querySelectorAll('h1, h2, h3, h4, h5, h6, p, ul, ol, img, a');
+  
+  allElements.forEach((element) => {
+    // 0. Skip if inside ignored structural elements (nav, footer, header, etc.)
+    if (isInsideIgnoredElement(element)) return;
+    
+    // 1. Determine Type
+    const type = getSlotType(element.tagName, element);
+    if (!type) return;
 
-    // Skip script, style, and other non-content elements
-    const tagName = element.tagName.toLowerCase();
-    if (['script', 'style', 'meta', 'link', 'noscript'].includes(tagName)) {
-      return false;
-    }
+    // 2. Skip if already processed
+    if (element.hasAttribute('data-slot')) return;
+    
+    // Skip tiny text (unless it's a heading or image)
+    const text = element.textContent?.trim() || '';
+    if (type === 'paragraph' && text.length < 10) return; 
+    if (type === 'cta' && text.length < 2) return;
 
-    // Skip empty elements (unless they're images or links)
-    if (type !== 'image' && type !== 'url' && !element.textContent?.trim()) {
-      return false;
-    }
+    // 3. Generate ID
+    const slotId = generateSlotId(element, type, text, slots);
+    const label = generateLabel(slotId);
 
-    const slotId = generateSlotId(element, type);
-    const label = generateLabel(slotId, type);
-
-    // Add data-slot attribute
+    // 4. Mark the DOM
     element.setAttribute('data-slot', slotId);
 
-    // Add to slots array
+    // 5. Register Slot
     slots.push({
       id: slotId,
       type,
       label,
     });
-
     slotCounter++;
-    return true;
-  }
-
-  // Detect headings (H1-H6)
-  const headings = body.querySelectorAll('h1, h2, h3, h4, h5, h6');
-  headings.forEach((heading) => {
-    processElement(heading, 'text');
-  });
-
-  // Detect paragraphs
-  const paragraphs = body.querySelectorAll('p');
-  paragraphs.forEach((p) => {
-    processElement(p, 'text');
-  });
-
-  // Detect lists (UL, OL)
-  const lists = body.querySelectorAll('ul, ol');
-  lists.forEach((list) => {
-    processElement(list, 'list');
-  });
-
-  // Detect images
-  const images = body.querySelectorAll('img');
-  images.forEach((img) => {
-    processElement(img, 'image');
-  });
-
-  // Detect links (A tags)
-  const links = body.querySelectorAll('a[href]');
-  links.forEach((link) => {
-    // Only process if it has meaningful content or href
-    if (link.textContent?.trim() || link.getAttribute('href')) {
-      processElement(link, 'url');
-    }
   });
 
   // Serialize back to HTML string
   let updatedHtmlBody: string;
-  
   if (serializer) {
-    // Browser: use XMLSerializer
     updatedHtmlBody = serializer.serializeToString(body);
-    // Remove the <body> tags that XMLSerializer adds
+    // Remove the <body> tags wrapper
     updatedHtmlBody = updatedHtmlBody.replace(/^<body[^>]*>|<\/body>$/gi, '');
   } else {
-    // Node.js: use innerHTML or outerHTML
     const bodyElement = body as HTMLElement;
     if ('innerHTML' in bodyElement && bodyElement.innerHTML) {
       updatedHtmlBody = bodyElement.innerHTML || htmlBody;
@@ -186,114 +152,121 @@ export function detectSlots(htmlBody: string): DetectSlotsResult {
         .map((child) => (child as HTMLElement).outerHTML || '')
         .join('\n');
     } else {
-      // Ultimate fallback
       updatedHtmlBody = htmlBody;
     }
   }
 
   return {
-    htmlBody: updatedHtmlBody || htmlBody,
+    htmlBody: updatedHtmlBody,
     slots,
   };
 }
 
 /**
- * Fallback regex-based slot detection (used when DOMParser is unavailable)
+ * Generate a unique, readable ID
+ */
+function generateSlotId(element: Element, type: SlotType, text: string, existingSlots: TemplateSlot[]): string {
+  // Try to make a semantic ID from content (e.g., "how_to_find_quality")
+  let baseId = '';
+  
+  if (text) {
+    baseId = text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') // trim underscores
+      .substring(0, 35); // keep it reasonable length
+  } else if (type === 'image') {
+    const alt = element.getAttribute('alt');
+    if (alt) {
+      baseId = alt.toLowerCase().replace(/[^a-z0-9]+/g, '_').substring(0, 35);
+    }
+  }
+
+  // Fallback if no text content (e.g. image with no alt)
+  if (!baseId || baseId.length < 3) {
+    baseId = `${type}_${existingSlots.length}`;
+  }
+
+  // Ensure uniqueness
+  let slotId = baseId;
+  let counter = 1;
+  while (existingSlots.some(s => s.id === slotId)) {
+    slotId = `${baseId}_${counter}`;
+    counter++;
+  }
+
+  return slotId;
+}
+
+function generateLabel(slotId: string): string {
+  return slotId
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Fallback regex-based detection (for Node.js environment without DOM)
  */
 function detectSlotsRegex(htmlBody: string): DetectSlotsResult {
   const slots: TemplateSlot[] = [];
-  let slotCounter = 0;
   let updatedHtml = htmlBody;
-
-  // Patterns for different element types
+  
+  // Regex patterns for our granular types
   const patterns = [
-    {
-      regex: /<(h[1-6])[^>]*>(.*?)<\/\1>/gi,
-      type: 'text' as SlotType,
-      tagName: 'h',
-    },
-    {
-      regex: /<(p)[^>]*>(.*?)<\/\1>/gi,
-      type: 'text' as SlotType,
-      tagName: 'p',
-    },
-    {
-      regex: /<(ul|ol)[^>]*>[\s\S]*?<\/\1>/gi,
-      type: 'list' as SlotType,
-      tagName: 'list',
-    },
-    {
-      regex: /<(img)[^>]*>/gi,
-      type: 'image' as SlotType,
-      tagName: 'img',
-    },
-    {
-      regex: /<(a)[^>]*href=["']([^"']+)["'][^>]*>.*?<\/\1>/gi,
-      type: 'url' as SlotType,
-      tagName: 'a',
-    },
+    { tag: 'h[1-2]', type: 'headline' as SlotType },
+    { tag: 'h[3-6]', type: 'subheadline' as SlotType },
+    { tag: 'p', type: 'paragraph' as SlotType },
+    { tag: '(?:ul|ol)', type: 'list' as SlotType },
+    { tag: 'a', type: 'cta' as SlotType },
+    { tag: 'img', type: 'image' as SlotType },
   ];
 
-  patterns.forEach((pattern) => {
-    let match;
-    const matches: Array<{ index: number; content: string; type: SlotType }> = [];
+  patterns.forEach(({ tag, type }) => {
+    // Match opening tag + content + closing tag (simplified)
+    // Note: This regex is basic and relies on standard HTML formatting
+    const regex = new RegExp(`<(${tag})([^>]*)>([\\s\\S]*?)<\\/\\1>`, 'gi');
+    
+    updatedHtml = updatedHtml.replace(regex, (match, tagName, attrs, content) => {
+      // Skip if already has slot
+      if (attrs.includes('data-slot')) return match;
 
-    // Collect all matches first
-    while ((match = pattern.regex.exec(htmlBody)) !== null) {
-      matches.push({
-        index: match.index,
-        content: match[0],
-        type: pattern.type,
-      });
-    }
+      // Basic noise filter for regex
+      const textContent = content.replace(/<[^>]*>/g, '').trim();
+      if (type === 'paragraph' && textContent.length < 10) return match;
+      if (type === 'cta' && textContent.length < 2) return match;
 
-    // Process matches in reverse order to preserve indices
-    matches.reverse().forEach((match) => {
-      // Extract text for ID generation
-      const textMatch = match.content.match(/>([^<]+)</);
-      const text = textMatch ? textMatch[1].trim().substring(0, 50) : '';
-
-      let baseId = text
+      // Generate ID
+      const baseId = textContent
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '_')
         .replace(/^_+|_+$/g, '')
-        .substring(0, 40);
-
-      if (!baseId) {
-        baseId = `${pattern.tagName}_${slotCounter}`;
-      }
+        .substring(0, 35) || `${type}_${slots.length}`;
 
       let slotId = baseId;
       let counter = 1;
-      while (slots.some((s) => s.id === slotId)) {
+      while (slots.some(s => s.id === slotId)) {
         slotId = `${baseId}_${counter}`;
         counter++;
       }
 
-      const label = slotId
-        .replace(/_/g, ' ')
-        .replace(/\b\w/g, (c) => c.toUpperCase());
+      const label = generateLabel(slotId);
+      slots.push({ id: slotId, type, label });
 
-      slots.push({
-        id: slotId,
-        type: match.type,
-        label,
-      });
-
-      // Add data-slot attribute to the HTML
-      const slotAttr = ` data-slot="${slotId}"`;
-      // Find the opening tag and add the attribute
-      updatedHtml = updatedHtml.replace(
-        match.content,
-        match.content.replace(/(<[^>]+)(>)/, `$1${slotAttr}$2`)
-      );
-
-      slotCounter++;
+      // Add data-slot attribute
+      return `<${tagName}${attrs} data-slot="${slotId}">${content}</${tagName}>`;
     });
+    
+    // Handle self-closing images separately
+    if (tag === 'img') {
+       updatedHtml = updatedHtml.replace(/<img([^>]*)>/gi, (match, attrs) => {
+        if (attrs.includes('data-slot')) return match;
+        const slotId = `image_${slots.length}`;
+        const label = generateLabel(slotId);
+        slots.push({ id: slotId, type: 'image', label });
+        return `<img${attrs} data-slot="${slotId}">`;
+      });
+    }
   });
 
-  return {
-    htmlBody: updatedHtml,
-    slots,
-  };
+  return { htmlBody: updatedHtml, slots };
 }

@@ -132,8 +132,7 @@ export async function POST(request: NextRequest) {
     // Validate that we have template fields to work with
     if (!templateFields || templateFields.length === 0) {
       const imageSlots = template.slots?.filter(s => s?.type === 'image').length || 0;
-      const urlSlots = template.slots?.filter(s => s?.type === 'url').length || 0;
-      const textSlots = (template.slots?.length || 0) - imageSlots - urlSlots;
+      const textSlots = template.slots?.filter(s => s?.type !== 'image').length || 0;
       
       console.error('❌ No template fields found after processing:', {
         templateId,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { UploadedTemplateRenderer } from '@/components/templates/UploadedTemplateRenderer';
@@ -101,6 +101,23 @@ function getSlotMaxLength(slotId: string, template: TemplateConfig | null): numb
   const fields = getTemplateFields(template);
   const field = fields.find(f => f.slotId === slotId);
   return field?.maxLength;
+}
+
+// Custom debounce hook
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
 }
 
 function CharacterCounter({ value, maxLength }: { value: string; maxLength?: number }) {
@@ -223,6 +240,9 @@ function WizardPageContent() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>('static-html');
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [warningFields, setWarningFields] = useState<string[]>([]);
+
+  // Debounce slotData for preview to prevent lag
+  const debouncedSlotData = useDebounce(data.slotData || {}, 300);
 
   useEffect(() => {
     setUploadedTemplates(loadUploadedTemplates());
@@ -1158,10 +1178,12 @@ function WizardPageContent() {
                 }
                 
                 return (
-                <div>
-                  <h2 className="text-xl font-semibold text-gray-900 mb-6">
-                    Content Placeholders
-                  </h2>
+                <div className="flex flex-col lg:flex-row gap-6">
+                  {/* Left Column: Input Form (1/3 on large screens, full width on small) */}
+                  <div className="flex-1 lg:w-1/3">
+                    <h2 className="text-xl font-semibold text-gray-900 mb-6">
+                      Content Placeholders
+                    </h2>
                     {selected && (
                     <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
                       <p className="text-sm text-blue-800">
@@ -1208,10 +1230,16 @@ function WizardPageContent() {
                         const slotValue = data.slotData?.[slot.id] || '';
                         const isFilled = slotValue.trim().length > 0;
                         const slotTypeMap: Record<string, string> = {
-                          text: 'paragraph',
+                          headline: 'headline',
+                          subheadline: 'subheadline',
+                          paragraph: 'paragraph',
                           list: 'list',
+                          cta: 'cta',
                           image: 'paragraph',
-                          url: 'paragraph',
+                          // Legacy types for backward compatibility
+                          text: 'paragraph',
+                          'rich-text': 'paragraph',
+                          url: 'cta',
                         };
                         const mappedSlotType = slotTypeMap[slot.type] || 'paragraph';
                         
@@ -1322,14 +1350,34 @@ function WizardPageContent() {
                     </div>
                   )}
 
-                  <div className="mt-8 pt-6 border-t border-gray-200">
-                    <button
-                      onClick={handleOpenPreviewInNewTab}
-                      className="w-full px-6 py-3 text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors font-medium"
-                    >
-                      Generate Preview
-                    </button>
+                    <div className="mt-8 pt-6 border-t border-gray-200">
+                      <button
+                        onClick={handleOpenPreviewInNewTab}
+                        className="w-full px-6 py-3 text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors font-medium"
+                      >
+                        Generate Preview
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Right Column: Live Preview (2/3 on large screens, full width on small) */}
+                  {selected && (
+                    <div className="flex-1 lg:w-2/3 lg:sticky lg:top-8 lg:self-start lg:max-h-[calc(100vh-4rem)] lg:overflow-y-auto">
+                      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 lg:p-6">
+                        <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                          Live Preview
+                        </h3>
+                        <div className="border border-gray-300 rounded-md overflow-hidden bg-white">
+                          <div className="max-h-[calc(100vh-12rem)] overflow-y-auto">
+                            <UploadedTemplateRenderer
+                              template={selected}
+                              slotData={debouncedSlotData}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 );
               })()}

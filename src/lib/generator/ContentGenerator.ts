@@ -57,8 +57,8 @@ export class GoogleGeminiProvider implements AIModelProvider {
     
     const genAI = new GoogleGenerativeAI(config.apiKey);
     
-    // FORCE use of ONLY gemini-2.0-flash - no fallbacks, no other models
-    const modelName = 'gemini-2.0-flash';
+    // Use the model name from config, with fallback to gemini-2.0-flash
+    const modelName = config.modelName || 'gemini-2.0-flash';
     
     let lastError: any = null;
     
@@ -173,8 +173,16 @@ export class GoogleGeminiProvider implements AIModelProvider {
 /**
  * Content Generator Service
  * Main service class for generating content using the two-step pipeline.
+ * 
+ * Uses a Hybrid Model Strategy:
+ * - CREATIVE_MODEL (gemini-2.5-pro): For high-quality creative tasks (core narrative)
+ * - FAST_MODEL (gemini-2.5-flash): For fast extraction tasks (slots, mapping)
  */
 export class ContentGenerator {
+  // Model constants for Hybrid Model Strategy
+  private static readonly CREATIVE_MODEL = 'gemini-2.5-pro'; // High-quality reasoning (gemini-1.5-pro was shut down Sep 2025)
+  private static readonly FAST_MODEL = 'gemini-2.5-flash';   // Speed/extraction (updated from deprecated gemini-2.0-flash)
+  
   private aiProvider: AIModelProvider;
   private modelConfig: AIModelConfig;
 
@@ -188,13 +196,13 @@ export class ContentGenerator {
       throw new Error('GOOGLE_AI_API_KEY environment variable is not set');
     }
 
-    // Default model configuration (using Gemini 2.0 Flash)
+    // Default model configuration (using Gemini 2.5 Flash)
     // Optimized for faster generation in serverless environments
     this.modelConfig = {
-      modelName: 'gemini-2.0-flash', // Use gemini-2.0-flash as default
+      modelName: 'gemini-2.5-flash', // Use gemini-2.5-flash as default
       apiKey,
       temperature: 0.7,
-      maxTokens: 3000, // Reduced from 4000 to speed up generation and avoid timeouts
+      maxTokens: 8192, // Increased to handle large JSON responses (e.g., 66+ slots)
       ...modelConfig,
     };
   }
@@ -203,6 +211,7 @@ export class ContentGenerator {
    * Step 1: Generate Core Narrative (Source of Truth)
    * Creates a comprehensive master article that serves as the foundation
    * for all subsequent slot content generation.
+   * Uses CREATIVE_MODEL for high-quality writing, with fallback to FAST_MODEL.
    */
   async generateCoreNarrative(
     request: CoreNarrativeRequest
@@ -223,7 +232,41 @@ export class ContentGenerator {
       console.log(prompt.substring(0, 500) + '...');
       console.log('='.repeat(80));
 
-      const coreNarrative = await this.aiProvider.generateText(prompt, this.modelConfig, 'generate-core-narrative');
+      // Use CREATIVE_MODEL for high-quality narrative generation
+      const creativeConfig = {
+        ...this.modelConfig,
+        modelName: ContentGenerator.CREATIVE_MODEL,
+      };
+      
+      let coreNarrative: string;
+      let lastError: any = null;
+      try {
+        console.log(`🎨 Using ${ContentGenerator.CREATIVE_MODEL} for high-quality narrative generation...`);
+        coreNarrative = await this.aiProvider.generateText(prompt, creativeConfig, 'generate-core-narrative');
+        console.log(`✅ Core Narrative Generated with ${ContentGenerator.CREATIVE_MODEL}`);
+      } catch (error: any) {
+        // Fallback to FAST_MODEL if CREATIVE_MODEL fails (timeout, unavailable, etc.)
+        lastError = error;
+        console.warn(`⚠️ ${ContentGenerator.CREATIVE_MODEL} failed, falling back to ${ContentGenerator.FAST_MODEL}:`, error.message);
+        try {
+          const fastConfig = {
+            ...this.modelConfig,
+            modelName: ContentGenerator.FAST_MODEL,
+          };
+          coreNarrative = await this.aiProvider.generateText(prompt, fastConfig, 'generate-core-narrative');
+          console.log(`✅ Core Narrative Generated with ${ContentGenerator.FAST_MODEL} (fallback)`);
+        } catch (fallbackError: any) {
+          // Both models failed - throw with detailed error
+          lastError = fallbackError;
+          console.error(`❌ Both ${ContentGenerator.CREATIVE_MODEL} and ${ContentGenerator.FAST_MODEL} failed`);
+          console.error(`CREATIVE_MODEL error:`, error.message);
+          console.error(`FAST_MODEL error:`, fallbackError.message);
+          throw new Error(
+            `Failed to generate core narrative. ${ContentGenerator.CREATIVE_MODEL} error: ${error.message || 'Unknown error'}. ` +
+            `${ContentGenerator.FAST_MODEL} fallback error: ${fallbackError.message || 'Unknown error'}`
+          );
+        }
+      }
       
       console.log('✅ Core Narrative Generated');
       console.log(`Length: ${coreNarrative.length} characters`);
@@ -246,6 +289,7 @@ export class ContentGenerator {
   /**
    * Step 2: Generate Slot Content from Core Narrative
    * Derives specific slot content from the core narrative to ensure consistency.
+   * Uses FAST_MODEL for speed-optimized extraction.
    */
   async generateSlot(request: SlotGenerationRequest): Promise<SlotGenerationResponse> {
     try {
@@ -256,7 +300,12 @@ export class ContentGenerator {
       console.log(`📤 Slot Prompt for "${request.slotId}":`);
       console.log(prompt.substring(0, 300) + '...');
 
-      const content = await this.aiProvider.generateText(prompt, this.modelConfig, `generate-slot-${request.slotId}`);
+      // Use FAST_MODEL for extraction tasks
+      const fastConfig = {
+        ...this.modelConfig,
+        modelName: ContentGenerator.FAST_MODEL,
+      };
+      const content = await this.aiProvider.generateText(prompt, fastConfig, `generate-slot-${request.slotId}`);
       
       console.log(`✅ Slot "${request.slotId}" Generated`);
       console.log(`Content: ${content.substring(0, 100)}...`);
@@ -398,9 +447,139 @@ export class ContentGenerator {
   }
 
   /**
+   * Process a batch of slots (helper method for batch processing)
+   */
+  private async processSlotBatch(
+    request: MapNarrativeToSlotsRequest,
+    batchFields: Array<{ slotId: string; slotType: SlotType; label: string; description?: string; instructions?: string; maxLength?: number }>,
+    batchNumber: number,
+    totalBatches: number
+  ): Promise<{ slots: Record<string, string>; errors: Record<string, string> }> {
+    console.log(`📦 Processing batch ${batchNumber}/${totalBatches} with ${batchFields.length} slots...`);
+    
+    const prompt = buildMapNarrativeToSlotsPrompt({
+      ...request,
+      templateFields: batchFields,
+    });
+    
+    const operationId = `map-narrative-batch-${batchNumber}-${Date.now()}`;
+    
+    const fastConfig = {
+      ...this.modelConfig,
+      modelName: ContentGenerator.FAST_MODEL,
+      maxTokens: 8192,
+    };
+    
+    const response = await this.aiProvider.generateText(prompt, fastConfig, operationId);
+    
+    if (!response || response.trim().length === 0) {
+      console.error(`❌ Empty response for batch ${batchNumber}`);
+      const errors: Record<string, string> = {};
+      batchFields.forEach(field => {
+        errors[field.slotId] = 'AI returned empty response for this batch';
+      });
+      return { slots: {}, errors };
+    }
+
+    let jsonContent = extractJsonFromResponse(response);
+    
+    if (!jsonContent || jsonContent.trim().length === 0) {
+      console.error(`❌ Empty JSON content for batch ${batchNumber}`);
+      const errors: Record<string, string> = {};
+      batchFields.forEach(field => {
+        errors[field.slotId] = 'Failed to extract JSON from AI response';
+      });
+      return { slots: {}, errors };
+    }
+
+    let parsed: Record<string, string>;
+    try {
+      parsed = JSON.parse(jsonContent);
+    } catch (parseError: any) {
+      try {
+        const sanitized = sanitizeJsonString(jsonContent);
+        parsed = JSON.parse(sanitized);
+      } catch (secondParseError: any) {
+        try {
+          const repaired = repairJsonString(jsonContent);
+          parsed = JSON.parse(repaired);
+        } catch (thirdParseError: any) {
+          // Last resort: regex extraction
+          const extracted: Record<string, string> = {};
+          const keyValuePattern = /"([^"]+)":\s*"((?:[^"\\]|\\.|[\r\n])*?)"(?=\s*[,}])/gs;
+          let match;
+          
+          while ((match = keyValuePattern.exec(jsonContent)) !== null) {
+            const key = match[1];
+            let value = match[2];
+            value = value
+              .replace(/\\n/g, '\n')
+              .replace(/\\r/g, '\r')
+              .replace(/\\t/g, '\t')
+              .replace(/\\"/g, '"')
+              .replace(/\\\\/g, '\\')
+              .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+            extracted[key] = value;
+          }
+          
+          if (Object.keys(extracted).length > 0) {
+            parsed = extracted;
+          } else {
+            const errors: Record<string, string> = {};
+            batchFields.forEach(field => {
+              errors[field.slotId] = 'Failed to parse AI response as JSON';
+            });
+            return { slots: {}, errors };
+          }
+        }
+      }
+    }
+
+    const slots: Record<string, string> = {};
+    const errors: Record<string, string> = {};
+    
+    for (const field of batchFields) {
+      const slotValue = parsed[field.slotId];
+      
+      if (slotValue === undefined || slotValue === null) {
+        errors[field.slotId] = 'Slot not found in AI response';
+        continue;
+      }
+      
+      if (typeof slotValue !== 'string') {
+        if (typeof slotValue === 'number' || typeof slotValue === 'boolean') {
+          slots[field.slotId] = String(slotValue).trim();
+        } else if (typeof slotValue === 'object') {
+          try {
+            slots[field.slotId] = JSON.stringify(slotValue).trim();
+          } catch {
+            errors[field.slotId] = 'Slot value is an object and cannot be converted to string';
+          }
+        } else {
+          errors[field.slotId] = `Slot value is of type ${typeof slotValue}, expected string`;
+        }
+      } else {
+        let cleanedValue = slotValue.trim();
+        cleanedValue = cleanedValue.replace(/<[^>]*>/g, '');
+        cleanedValue = cleanedValue
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&#039;/g, "'")
+          .replace(/&nbsp;/g, ' ');
+        slots[field.slotId] = cleanedValue.trim();
+      }
+    }
+
+    console.log(`✅ Batch ${batchNumber}/${totalBatches} completed: ${Object.keys(slots).length} slots, ${Object.keys(errors).length} errors`);
+    return { slots, errors };
+  }
+
+  /**
    * Map core narrative to template slots.
-   * Distributes the narrative content across all defined slots in a single operation.
-   * This is more efficient than generating slots individually.
+   * Distributes the narrative content across all defined slots.
+   * For large slot counts (30+), processes in batches to avoid token limits.
    */
   async mapNarrativeToSlots(
     request: MapNarrativeToSlotsRequest
@@ -439,7 +618,54 @@ export class ContentGenerator {
         throw new Error('GOOGLE_AI_API_KEY is not set. Please configure it in your environment variables.');
       }
 
-      // Use validFields for the prompt and processing
+      // Determine batch size: use smaller batches for very large slot counts
+      // 20-25 slots per batch is safe to avoid token limits
+      const BATCH_SIZE = 25;
+      const useBatching = validFields.length > BATCH_SIZE;
+      
+      if (useBatching) {
+        console.log(`📦 Large slot count detected (${validFields.length} slots). Processing in batches of ${BATCH_SIZE}...`);
+        
+        const batches: Array<typeof validFields> = [];
+        for (let i = 0; i < validFields.length; i += BATCH_SIZE) {
+          batches.push(validFields.slice(i, i + BATCH_SIZE));
+        }
+        
+        console.log(`📦 Split into ${batches.length} batches`);
+        
+        const allSlots: Record<string, string> = {};
+        const allErrors: Record<string, string> = {};
+        
+        // Process batches sequentially to avoid rate limits
+        for (let i = 0; i < batches.length; i++) {
+          const batch = batches[i];
+          const batchResult = await this.processSlotBatch(
+            request,
+            batch,
+            i + 1,
+            batches.length
+          );
+          
+          // Merge results
+          Object.assign(allSlots, batchResult.slots);
+          Object.assign(allErrors, batchResult.errors);
+          
+          // Small delay between batches to avoid rate limits
+          if (i < batches.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+        
+        console.log(`✅ Batch processing complete: ${Object.keys(allSlots).length} slots mapped, ${Object.keys(allErrors).length} errors`);
+        
+        return {
+          slots: allSlots,
+          success: Object.keys(allErrors).length === 0,
+          slotErrors: Object.keys(allErrors).length > 0 ? allErrors : undefined,
+        };
+      }
+
+      // For smaller slot counts, use the original single-request approach
       const prompt = buildMapNarrativeToSlotsPrompt({
         ...request,
         templateFields: validFields,
@@ -451,10 +677,14 @@ export class ContentGenerator {
       console.log(prompt.substring(0, 500) + '...');
       console.log('='.repeat(80));
 
-      // Generate operation ID for rate limiting tracking
       const operationId = `map-narrative-${Date.now()}`;
       
-      const response = await this.aiProvider.generateText(prompt, this.modelConfig, operationId);
+      const fastConfig = {
+        ...this.modelConfig,
+        modelName: ContentGenerator.FAST_MODEL,
+        maxTokens: 8192,
+      };
+      const response = await this.aiProvider.generateText(prompt, fastConfig, operationId);
       
       console.log('✅ Mapping Response Received');
       console.log(`Response length: ${response.length} characters`);
@@ -779,6 +1009,7 @@ export class ContentGenerator {
   /**
    * Regenerate a single slot with core narrative context.
    * Used when user clicks "Regenerate" on a specific field.
+   * Uses FAST_MODEL for speed-optimized regeneration.
    */
   async regenerateSlot(request: RegenerateSlotRequest): Promise<RegenerateSlotResponse> {
     try {
@@ -789,7 +1020,12 @@ export class ContentGenerator {
       console.log(`📤 Regeneration Prompt for "${request.slotId}":`);
       console.log(prompt.substring(0, 300) + '...');
 
-      let content = await this.aiProvider.generateText(prompt, this.modelConfig, `regenerate-slot-${request.slotId}`);
+      // Use FAST_MODEL for extraction/regeneration tasks
+      const fastConfig = {
+        ...this.modelConfig,
+        modelName: ContentGenerator.FAST_MODEL,
+      };
+      let content = await this.aiProvider.generateText(prompt, fastConfig, `regenerate-slot-${request.slotId}`);
       
       // Strip HTML tags if AI included them (shouldn't happen, but just in case)
       content = content.replace(/<[^>]*>/g, '');
