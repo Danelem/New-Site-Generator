@@ -177,13 +177,17 @@ export function detectSlots(htmlBody: string): DetectSlotsResult {
     updatedHtmlBody = updatedHtmlBody.replace(/^<body[^>]*>|<\/body>$/gi, '');
   } else {
     // Node.js: use innerHTML or outerHTML
-    if ('innerHTML' in body) {
-      updatedHtmlBody = (body as any).innerHTML || htmlBody;
-    } else {
+    const bodyElement = body as HTMLElement;
+    if ('innerHTML' in bodyElement && bodyElement.innerHTML) {
+      updatedHtmlBody = bodyElement.innerHTML || htmlBody;
+    } else if ('children' in bodyElement && bodyElement.children) {
       // Fallback: reconstruct from elements
-      updatedHtmlBody = Array.from(body.children)
-        .map((child) => (child as any).outerHTML || '')
+      updatedHtmlBody = Array.from(bodyElement.children)
+        .map((child) => (child as HTMLElement).outerHTML || '')
         .join('\n');
+    } else {
+      // Ultimate fallback
+      updatedHtmlBody = htmlBody;
     }
   }
 
