@@ -26,6 +26,8 @@ import {
   buildMapNarrativeToSlotsPrompt,
   buildRegenerateSlotPrompt,
   extractJsonFromResponse,
+  sanitizeJsonString,
+  repairJsonString,
 } from './prompts';
 import { rateLimiter } from './rateLimiter';
 import { GoogleGenerativeAI } from './googleAI';
@@ -474,6 +476,9 @@ export class ContentGenerator {
       console.log(prompt.substring(0, 500) + '...');
       console.log('='.repeat(80));
 
+      // Generate operation ID for rate limiting tracking
+      const operationId = `map-narrative-${Date.now()}`;
+      
       const response = await this.aiProvider.generateText(prompt, this.modelConfig, operationId);
       
       console.log('✅ Mapping Response Received');
@@ -505,22 +510,113 @@ export class ContentGenerator {
       
       let parsed: Record<string, string>;
       try {
+        // Try parsing as-is first
         parsed = JSON.parse(jsonContent);
         console.log(`📋 Parsed JSON with ${Object.keys(parsed).length} keys:`, Object.keys(parsed));
       } catch (parseError: any) {
-        console.error('❌ Failed to parse mapping response:', parseError);
-        console.error('Parse error details:', {
-          message: parseError?.message,
-          name: parseError?.name,
-          stack: parseError?.stack,
-        });
-        console.error('Extracted JSON content:', jsonContent.substring(0, 500));
-        console.error('Raw response:', response.substring(0, 500));
-        return {
-          slots: {},
-          success: false,
-          error: `Failed to parse AI response as JSON: ${parseError?.message || 'Invalid JSON format'}`,
-        };
+        // If parsing fails, try sanitizing control characters
+        console.warn('⚠️ Initial JSON parse failed, attempting to repair JSON...');
+        console.warn('Parse error:', parseError?.message);
+        
+        try {
+          // First try sanitizing control characters
+          const sanitized = sanitizeJsonString(jsonContent);
+          parsed = JSON.parse(sanitized);
+          console.log(`✅ Successfully parsed after sanitization with ${Object.keys(parsed).length} keys:`, Object.keys(parsed));
+        } catch (secondParseError: any) {
+          // If sanitization didn't work, try full repair
+          console.warn('⚠️ Sanitization failed, attempting full JSON repair...');
+          console.warn('Second parse error:', secondParseError?.message);
+          
+          try {
+            const repaired = repairJsonString(jsonContent);
+            parsed = JSON.parse(repaired);
+            console.log(`✅ Successfully parsed after repair with ${Object.keys(parsed).length} keys:`, Object.keys(parsed));
+          } catch (thirdParseError: any) {
+            // Last resort: try to extract key-value pairs using regex
+            console.warn('⚠️ All JSON repair attempts failed, trying regex extraction as last resort...');
+            console.warn('Third parse error:', thirdParseError?.message);
+            
+            try {
+              // Try to extract key-value pairs using regex
+              // This is a fallback for severely malformed JSON
+              const extracted: Record<string, string> = {};
+              
+              // More robust pattern that handles:
+              // - Multi-line values
+              // - Unterminated strings (up to a reasonable limit)
+              // - Escaped characters
+              const keyValuePattern = /"([^"]+)":\s*"((?:[^"\\]|\\.|[\r\n])*?)"(?=\s*[,}])/gs;
+              let match;
+              
+              while ((match = keyValuePattern.exec(jsonContent)) !== null) {
+                const key = match[1];
+                let value = match[2];
+                // Unescape common escape sequences
+                value = value
+                  .replace(/\\n/g, '\n')
+                  .replace(/\\r/g, '\r')
+                  .replace(/\\t/g, '\t')
+                  .replace(/\\"/g, '"')
+                  .replace(/\\\\/g, '\\')
+                  .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+                extracted[key] = value;
+              }
+              
+              // If regex didn't find enough, try a more permissive approach
+              // Look for patterns like "key": "value" even if value has issues
+              if (Object.keys(extracted).length === 0) {
+                const permissivePattern = /"([^"]+)":\s*"([^"]*)"?/g;
+                while ((match = permissivePattern.exec(jsonContent)) !== null) {
+                  const key = match[1];
+                  const value = match[2] || '';
+                  if (key && !extracted[key]) {
+                    extracted[key] = value
+                      .replace(/\\n/g, '\n')
+                      .replace(/\\r/g, '\r')
+                      .replace(/\\t/g, '\t')
+                      .replace(/\\"/g, '"')
+                      .replace(/\\\\/g, '\\');
+                  }
+                }
+              }
+              
+              if (Object.keys(extracted).length > 0) {
+                parsed = extracted;
+                console.log(`✅ Extracted ${Object.keys(parsed).length} slots using regex fallback:`, Object.keys(parsed));
+              } else {
+                throw new Error('No valid key-value pairs found in response');
+              }
+            } catch (extractionError: any) {
+              console.error('❌ Failed to parse mapping response after all repair attempts:', thirdParseError);
+              console.error('Extraction error:', extractionError?.message);
+              console.error('Parse error details:', {
+                message: thirdParseError?.message,
+                name: thirdParseError?.name,
+                stack: thirdParseError?.stack,
+              });
+              console.error('Extracted JSON content (first 1000 chars):', jsonContent.substring(0, 1000));
+              console.error('Raw response (first 500 chars):', response.substring(0, 500));
+              
+              // Try to provide more helpful error message
+              const errorMsg = thirdParseError?.message || 'Invalid JSON format';
+              const positionMatch = errorMsg.match(/position (\d+)/);
+              if (positionMatch) {
+                const pos = parseInt(positionMatch[1], 10);
+                const contextStart = Math.max(0, pos - 100);
+                const contextEnd = Math.min(jsonContent.length, pos + 100);
+                console.error('Context around error position:', jsonContent.substring(contextStart, contextEnd));
+                console.error('Character at position:', jsonContent[pos] || 'EOF');
+              }
+              
+              return {
+                slots: {},
+                success: false,
+                error: `Failed to parse AI response as JSON: ${errorMsg}. The AI response may be malformed or truncated. Please try regenerating the narrative or mapping again. If the issue persists, the AI response may be too long or contain invalid characters.`,
+              };
+            }
+          }
+        }
       }
       
       // Log expected vs actual slot IDs for debugging

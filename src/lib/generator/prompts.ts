@@ -417,3 +417,219 @@ export function extractJsonFromResponse(response: string): string {
   
   return jsonContent;
 }
+
+/**
+ * Sanitize JSON string by properly escaping control characters in string values.
+ * This fixes issues where AI responses contain unescaped newlines, tabs, etc.
+ * Uses a careful approach to preserve valid JSON structure and escape sequences.
+ */
+export function sanitizeJsonString(jsonString: string): string {
+  let result = jsonString;
+  let inString = false;
+  let escapeNext = false;
+  let output = '';
+  
+  for (let i = 0; i < result.length; i++) {
+    const char = result[i];
+    const code = char.charCodeAt(0);
+    
+    if (escapeNext) {
+      // We're in an escape sequence, preserve it as-is
+      output += char;
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      // Start of escape sequence
+      output += char;
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"') {
+      // Toggle string state
+      inString = !inString;
+      output += char;
+      continue;
+    }
+    
+    if (inString) {
+      // We're inside a string value
+      // Check if this is an unescaped control character
+      if ((code >= 0x00 && code <= 0x1F) || code === 0x7F) {
+        // Escape the control character
+        if (char === '\n') {
+          output += '\\n';
+        } else if (char === '\r') {
+          output += '\\r';
+        } else if (char === '\t') {
+          output += '\\t';
+        } else if (char === '\b') {
+          output += '\\b';
+        } else if (char === '\f') {
+          output += '\\f';
+        } else {
+          // Use Unicode escape for other control characters
+          const hex = code.toString(16).padStart(4, '0');
+          output += `\\u${hex}`;
+        }
+      } else {
+        output += char;
+      }
+    } else {
+      // Outside string, copy as-is
+      output += char;
+    }
+  }
+  
+  return output;
+}
+
+/**
+ * Repair malformed JSON by fixing common issues:
+ * - Unterminated strings
+ * - Unescaped quotes in strings
+ * - Missing closing braces/brackets
+ * - Truncated responses
+ */
+export function repairJsonString(jsonString: string): string {
+  let result = jsonString.trim();
+  let inString = false;
+  let escapeNext = false;
+  let output = '';
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let lastChar = '';
+  let stringStartPos = -1;
+  
+  // Find the start of the JSON object (first {)
+  let startIdx = result.indexOf('{');
+  if (startIdx === -1) {
+    // No opening brace found, try to construct one
+    return `{${result}}`;
+  }
+  
+  // Find the last closing brace to handle truncation
+  let endIdx = result.lastIndexOf('}');
+  if (endIdx === -1 || endIdx < startIdx) {
+    endIdx = result.length;
+  } else {
+    endIdx = endIdx + 1; // Include the closing brace
+  }
+  
+  // Process the JSON content
+  for (let i = startIdx; i < endIdx; i++) {
+    const char = result[i];
+    const code = char.charCodeAt(0);
+    
+    if (escapeNext) {
+      output += char;
+      escapeNext = false;
+      lastChar = char;
+      continue;
+    }
+    
+    if (char === '\\') {
+      output += char;
+      escapeNext = true;
+      lastChar = char;
+      continue;
+    }
+    
+    if (char === '"') {
+      if (!inString) {
+        stringStartPos = i;
+      }
+      inString = !inString;
+      output += char;
+      lastChar = char;
+      continue;
+    }
+    
+    if (inString) {
+      // Inside a string - escape control characters
+      if ((code >= 0x00 && code <= 0x1F) || code === 0x7F) {
+        // Escape control characters
+        if (char === '\n') {
+          output += '\\n';
+        } else if (char === '\r') {
+          output += '\\r';
+        } else if (char === '\t') {
+          output += '\\t';
+        } else if (char === '\b') {
+          output += '\\b';
+        } else if (char === '\f') {
+          output += '\\f';
+        } else {
+          const hex = code.toString(16).padStart(4, '0');
+          output += `\\u${hex}`;
+        }
+      } else {
+        output += char;
+      }
+      lastChar = char;
+    } else {
+      // Outside string - track braces and brackets
+      if (char === '{') {
+        braceDepth++;
+        output += char;
+      } else if (char === '}') {
+        braceDepth--;
+        output += char;
+      } else if (char === '[') {
+        bracketDepth++;
+        output += char;
+      } else if (char === ']') {
+        bracketDepth--;
+        output += char;
+      } else {
+        output += char;
+      }
+      lastChar = char;
+    }
+  }
+  
+  // If we ended inside a string, try to close it intelligently
+  if (inString) {
+    // Check if we're in the middle of a value (after a colon)
+    const lastColon = output.lastIndexOf(':');
+    const lastComma = output.lastIndexOf(',');
+    if (lastColon > lastComma) {
+      // We're in a value, close the string
+      output += '"';
+      inString = false;
+    } else {
+      // We might be in a key, this is more problematic
+      // Try to find where the string should have ended
+      const remaining = result.substring(endIdx);
+      const nextQuote = remaining.indexOf('"');
+      if (nextQuote !== -1 && nextQuote < 100) {
+        // Found a quote nearby, the string might have been split
+        // Just close it here
+        output += '"';
+        inString = false;
+      } else {
+        // Truncated string, close it
+        output += '"';
+        inString = false;
+      }
+    }
+  }
+  
+  // Close any unclosed braces or brackets
+  while (braceDepth > 0) {
+    // Before closing, check if we need a comma
+    if (output.trim().length > 0 && !output.trim().endsWith(',') && !output.trim().endsWith('{') && !output.trim().endsWith('[')) {
+      output += ',';
+    }
+    output += '}';
+    braceDepth--;
+  }
+  while (bracketDepth > 0) {
+    output += ']';
+    bracketDepth--;
+  }
+  
+  return output;
+}
